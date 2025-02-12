@@ -1,13 +1,15 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
-from pyspark.sql.functions import col, sum as Fsum, regexp_extract, expr
-import unittest
+from pyspark.sql.functions import col, sum as Fsum, current_date, expr, regexp_extract
+from delta.tables import DeltaTable
 
 spark = SparkSession.builder \
-    .appName("Databricks Test") \
-    .enableHiveSupport() \
+    .appName("Purgo Playground Data Processing") \
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+    .config("spark.sql.catalog.purgo_playground", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
     .getOrCreate()
 
+# Define the schema for the data
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -15,60 +17,58 @@ schema = StructType([
     StructField("sales_date", StringType(), True)
 ])
 
-# Sample data loading for testing
-data = [
-    ("US", "P1001", 50, "2024-01-15"),
-    ("US", "P1002", 30, "2024-01-16"),
-    ("CA", "P1001", 40, "2024-01-15"),
-    ("CA", "P1003", 25, "2024-01-17"),
-    ("UK", "P1002", 35, "2024-01-18"),
-    ("UK", "P1004", 20, "2024-01-19"),
-    ("IN", "P1001", 60, "2024-01-20"),
-    ("IN", "P1003", 45, "2024-01-21"),
-    ("AU", "P1004", 55, "2024-01-22"),
-    ("AU", "P1002", 38, "2024-01-23"),
-]
+# Load the data
+data_path = "path/to/sample_sales_data.csv"
+df = spark.read.option("header", "true").schema(schema).csv(data_path)
 
-df = spark.createDataFrame(data, schema)
+# Data Validation
+def validate_data(df):
+    # Validate country code
+    invalid_country = df.filter(~col("country_cd").rlike("^[A-Z]{2}$"))
+    if invalid_country.count() > 0:
+        raise ValueError("Invalid country_cd format found")
 
-class TestPurgoPlayground(unittest.TestCase):
+    # Validate product ID
+    invalid_product_id = df.filter(~col("product_id").rlike("^P\d{4}$"))
+    if invalid_product_id.count() > 0:
+        raise ValueError("Invalid product_id format found")
 
-    def test_country_code_format(self):
-        invalid_country = df.where(~col("country_cd").rlike("^[A-Z]{2}$"))
-        self.assertTrue(invalid_country.count() == 0, "Invalid country_cd format found")
+    # Validate positive qty_sold
+    negative_qty_sold = df.filter(col("qty_sold") <= 0)
+    if negative_qty_sold.count() > 0:
+        raise ValueError("Negative qty_sold found")
 
-    def test_product_id_format(self):
-        invalid_product_id = df.where(~col("product_id").rlike("^P\d{4}$"))
-        self.assertTrue(invalid_product_id.count() == 0, "Invalid product_id format found")
+    # Validate sales_date format
+    invalid_sales_date = df.filter(~col("sales_date").rlike("^\d{4}-\d{2}-\d{2}$"))
+    if invalid_sales_date.count() > 0:
+        raise ValueError("Invalid sales_date format found")
 
-    def test_positive_qty_sold(self):
-        negative_qty_sold = df.where(col("qty_sold") <= 0)
-        self.assertTrue(negative_qty_sold.count() == 0, "Negative qty_sold found")
+    # Validate no future dates
+    future_dates = df.filter(expr("sales_date > current_date()"))
+    if future_dates.count() > 0:
+        raise ValueError("Future date found in sales_date")
 
-    def test_sales_date_format(self):
-        invalid_sales_date = df.where(~col("sales_date").rlike("^\d{4}-\d{2}-\d{2}$"))
-        self.assertTrue(invalid_sales_date.count() == 0, "Invalid sales_date format found")
+validate_data(df)
 
-    def test_total_quantity_by_product(self):
-        expected_totals = {
-            "P1001": 150,
-            "P1002": 103,
-            "P1003": 70,
-            "P1004": 75
-        }
-        calculated_totals = df.groupBy("product_id").agg(Fsum("qty_sold").alias("total_qty")).collect()
-        for row in calculated_totals:
-            product_id = row["product_id"]
-            total_qty = row["total_qty"]
-            self.assertEqual(total_qty, expected_totals[product_id])
+# Data Processing - Calculate Total Quantity Sold Per Product
+total_qty_df = df.groupBy("product_id").agg(Fsum("qty_sold").alias("total_qty"))
 
-    def test_no_future_dates(self):
-        future_dates = df.where(expr("sales_date > current_date()"))
-        self.assertTrue(future_dates.count() == 0, "Future date found in sales_date")
+# Delta Lake Integration
+delta_table_path = "path/to/delta_table"
+delta_table = DeltaTable.forPath(spark, delta_table_path)
 
-    def test_null_handling(self):
-        null_checks = df.select([col(c).isNull().alias(c + "_is_null") for c in df.columns])
-        self.assertTrue(null_checks.rdd.map(lambda row: all(v == False for v in row)).reduce(lambda a, b: a and b), "NULL value found in DataFrame")
+# Merge data into Delta table
+delta_table.alias("existing").merge(
+    df.alias("updates"),
+    "existing.product_id = updates.product_id"
+).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
 
-if __name__ == '__main__':
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)  # Don't call sys.exit() in Jupyter
+# Optimize Delta Table by Z-Ordering on product_id
+spark.sql(f"OPTIMIZE delta.`{delta_table_path}` ZORDER BY (product_id)")
+
+# Vacuum Delta Table
+spark.sql(f"VACUUM delta.`{delta_table_path}`")
+
+# Caching for performance
+df.cache()
+total_qty_df.cache()
