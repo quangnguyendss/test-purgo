@@ -1,0 +1,62 @@
+Feature: Data Validation and Processing for Purgo Playground Schema
+
+  Background:
+    Given the dataset is loaded into the purgo_playground schema
+    And the dataset has the following fields: country_cd, product_id, qty_sold, sales_date
+
+  Scenario: Validate Data Format and Integrity
+    Given the dataset is loaded
+    When the data is processed for validation
+    Then the country_cd field must be a valid country code of two uppercase letters
+    And the product_id must follow the format 'P' followed by four digits
+    And the qty_sold must be a positive integer
+    And the sales_date should be in the format YYYY-MM-DD
+
+  Scenario Outline: Calculate Total Quantity Sold Per Product
+    Given the dataset is filtered by country_cd "<country_cd>"
+    When the total quantity sold per product_id is calculated
+    Then the total quantity for product_id "<product_id>" should be "<total_qty>"
+
+    Examples:
+      | country_cd | product_id | total_qty |
+      | US         | P1001      | 50        |
+      | US         | P1002      | 30        |
+      | CA         | P1001      | 40        |
+      | CA         | P1003      | 25        |
+
+  Scenario Outline: Identify Error for Missing Data
+    Given the dataset is processed
+    When a row is missing required data
+    Then an error message "Missing required data in row <row_number>" should be displayed
+
+    Examples:
+      | row_number |
+      | 5          |
+      | 10         |
+
+  Scenario: Error on Incorrect Date Format
+    Given a sales_date of "15-01-2024"
+    When data validation is run
+    Then an error message "Incorrect date format in sales_date, expected YYYY-MM-DD" should be displayed
+
+  Scenario Outline: Calculate Total Sales for Given Product
+    Given the dataset contains sales data
+    When the data is processed for total sales
+    Then the total sales for product_id "<product_id>" across all countries should be "<total_sales>"
+
+    Examples:
+      | product_id | total_sales |
+      | P1001      | 150         |
+      | P1002      | 103         |
+      | P1003      | 70          |
+      | P1004      | 75          |
+
+  Scenario: Validate Sales Date Range
+    Given the sales_date is present in the dataset
+    When the data is processed
+    Then sales_date should not be a future date
+
+  Scenario: Error on Negative Quantity Sold
+    Given a qty_sold of -10 for product_id "P1004"
+    When the data is processed
+    Then an error message "Quantity sold must be a positive integer" should be displayed
