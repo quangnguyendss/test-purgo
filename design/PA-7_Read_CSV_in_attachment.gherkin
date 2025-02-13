@@ -1,56 +1,54 @@
-Feature: Sales Data Processing in Unity Catalog Schema "purgo_playground"
+Feature: Data Validation and Processing for Sample Sales Data
 
   Background:
-    Given the sample_sales_data.csv file is available 
-      | country_cd | product_id | qty_sold | sales_date  |
-      | US         | P1001      | 50       | 2024-01-15  |
-      | US         | P1002      | 30       | 2024-01-16  |
-      | CA         | P1001      | 40       | 2024-01-15  |
-      | CA         | P1003      | 25       | 2024-01-17  |
-      | UK         | P1002      | 35       | 2024-01-18  |
-      | UK         | P1004      | 20       | 2024-01-19  |
-      | IN         | P1001      | 60       | 2024-01-20  |
-      | IN         | P1003      | 45       | 2024-01-21  |
-      | AU         | P1004      | 55       | 2024-01-22  |
-      | AU         | P1002      | 38       | 2024-01-23  |
-    And the data format is CSV
-    And the data schema in the Unity Catalog is "purgo_playground"
+    Given a CSV file "sample_sales_data.csv" with columns "country_cd", "product_id", "qty_sold", "sales_date"
+    And the schema used is "purgo_playground"
 
-  Scenario Outline: Successful Sales Data Import
-    Given a CSV file with sales data is present
-    When the data is imported to the Unity Catalog Schema "purgo_playground"
-    Then the data should be present in the "sales_data" table
-    And the data should match the format:
-      | country_cd Varchar(2) | product_id Varchar(10) | qty_sold Integer | sales_date Date |
+  Scenario: Validate and Process Happy Path Data
+    Given the CSV file is successfully uploaded to the system
+    When the data is processed
+    Then the data should be stored in "purgo_playground.sales_data" table
+    And each entry should have a valid "country_cd", "product_id", "qty_sold", and "sales_date"
+    And "qty_sold" should be a positive integer
+    And "sales_date" should be in "YYYY-MM-DD" format
+    
+  Scenario: Handle Invalid Quantity Data
+    Given a CSV file contains "qty_sold" data that is not a positive integer
+    When the data is processed
+    Then an error message "Invalid quantity for product_id at sales_date. Quantity must be a positive integer." should be logged
+
+  Scenario: Handle Invalid Date Format
+    Given a CSV file contains "sales_date" data not in "YYYY-MM-DD" format
+    When the data is processed
+    Then an error message "Invalid date format for product_id at sales_date. Date must be in YYYY-MM-DD format." should be logged
+
+  Scenario Outline: Process and Validate Different Country Codes
+    Given a "sample_sales_data.csv" file is provided
+    When the data is processed
+    Then entries with country code "<country_cd>" should be validated against the list of allowed country codes
     Examples:
-      | file_path                |
-      | sample_sales_data.csv    |
+      | country_cd |
+      | US         |
+      | CA         |
+      | UK         |
+      | IN         |
+      | AU         |
 
-  Scenario: Validation of Imported Data
-    Given the sales data has been imported
-    When querying for total product sales
-    Then the sum of "qty_sold" should match expected values per product ID
-    | product_id | expected_qty_sold |
-    | P1001      | 150               |
-    | P1002      | 103               |
-    | P1003      | 70                |
-    | P1004      | 75                |
+  Scenario: Handle Data Integration with External Systems
+    Given the data is stored in "purgo_playground.sales_data" table
+    When the system integrates with external CRM for sales analysis
+    Then the integration should use API endpoint "https://api.externalcrm.com/salesdata"
+    And the data should be transmitted securely using TLS encryption
+    And only fields "country_cd", "product_id", "qty_sold", "sales_date" are shared
 
-  Scenario: Error Handling for Incorrect Data Format
-    Given a CSV file with incorrect data format
-    When trying to import this data
-    Then an error should occur
-    And the error message should be "Data Format Error: Invalid data format for sales_date"
-    Examples:
-      | file_path                     | incorrect_format                                       |
-      | incorrect_sales_data.csv      | "country_cd, product_id, qty_sold, incorrect_date"     |
+  Scenario: Ensure Data Security and Compliance
+    Given the schema "purgo_playground" has access control lists configured
+    When data is accessed
+    Then only users with "data_viewer" roles are permitted to access the data
+    And all data access is logged with a timestamp and user ID
 
-  Scenario: Error Handling for Missing Required Field
-    Given a CSV file with missing fields
-    When trying to import this data
-    Then an error should occur
-    And the error message should be "Data Import Error: Missing required field 'qty_sold'"
-    Examples:
-      | file_path                         | missing_field                                |
-      | missing_qty_sold_data.csv         | "country_cd, product_id, sales_date"         |
-
+  Scenario: Validate Against Security and Compliance Standards
+    Given data is stored and processed in "purgo_playground"
+    When validation occurs
+    Then the system should comply with GDPR requirements for data handling
+    And log a message "Data processing and storage complies with GDPR" on successful validation
