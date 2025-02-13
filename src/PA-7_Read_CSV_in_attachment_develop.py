@@ -1,74 +1,126 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
-from pyspark.sql.functions import col, sum as Fsum, current_date, expr, regexp_extract
-from delta.tables import DeltaTable
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
+from pyspark.sql.functions import col, expr, when
+from pyspark.sql.streaming import DataStreamWriter
+from pyspark.sql.utils import AnalysisException
 
+# Initialize Spark Session
 spark = SparkSession.builder \
-    .appName("Purgo Playground Data Processing") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.purgo_playground", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+    .appName("Databricks Test Data Validation") \
     .getOrCreate()
 
-# Define the schema for the data
+# Define schema
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
     StructField("qty_sold", IntegerType(), True),
-    StructField("sales_date", StringType(), True)
+    StructField("sales_date", TimestampType(), True)
 ])
 
-# Load the data
-data_path = "path/to/sample_sales_data.csv"
-df = spark.read.option("header", "true").schema(schema).csv(data_path)
+# Load test DataFrame
+df = spark.read.format("delta").table("purgo_playground.sample_sales_data")
 
-# Data Validation
-def validate_data(df):
-    # Validate country code
-    invalid_country = df.filter(~col("country_cd").rlike("^[A-Z]{2}$"))
-    if invalid_country.count() > 0:
-        raise ValueError("Invalid country_cd format found")
+# SQL Testing: Validate country_cd format
+def test_country_cd_format():
+    invalid_countries = df.filter(~col("country_cd").rlike("^[A-Z]{2}$"))
+    assert invalid_countries.count() == 0, f"Invalid country codes found: {invalid_countries.show()}"
 
-    # Validate product ID
-    invalid_product_id = df.filter(~col("product_id").rlike("^P\d{4}$"))
-    if invalid_product_id.count() > 0:
-        raise ValueError("Invalid product_id format found")
+# SQL Testing: Validate product_id format
+def test_product_id_format():
+    invalid_products = df.filter(~col("product_id").rlike("^P\\d{4}$"))
+    assert invalid_products.count() == 0, f"Invalid product_ids found: {invalid_products.show()}"
 
-    # Validate positive qty_sold
-    negative_qty_sold = df.filter(col("qty_sold") <= 0)
-    if negative_qty_sold.count() > 0:
-        raise ValueError("Negative qty_sold found")
+# SQL Testing: Validate qty_sold as positive integer
+def test_qty_sold_positive():
+    invalid_qtys = df.filter(col("qty_sold") <= 0)
+    assert invalid_qtys.count() == 0, f"Non-positive quantities found: {invalid_qtys.show()}"
 
-    # Validate sales_date format
-    invalid_sales_date = df.filter(~col("sales_date").rlike("^\d{4}-\d{2}-\d{2}$"))
-    if invalid_sales_date.count() > 0:
-        raise ValueError("Invalid sales_date format found")
+# SQL Testing: Validate correct date format for sales_date
+def test_sales_date_format():
+    try:
+        df.withColumn("sales_date_cast", col("sales_date").cast("date")).count()
+    except AnalysisException as e:
+        assert False, f"Incorrect sales_date format: {e}"
 
-    # Validate no future dates
-    future_dates = df.filter(expr("sales_date > current_date()"))
-    if future_dates.count() > 0:
-        raise ValueError("Future date found in sales_date")
+# DataFrame Schema Validation
+def test_schema():
+    expected_schema = StructType([
+        StructField("country_cd", StringType(), True),
+        StructField("product_id", StringType(), True),
+        StructField("qty_sold", IntegerType(), True),
+        StructField("sales_date", TimestampType(), True)
+    ])
+    assert df.schema == expected_schema, f"Schema does not match. Expected: {expected_schema} Actual: {df.schema}"
 
-validate_data(df)
+# Delta Lake Operations Test
+def test_delta_lake_operations():
+    df.createOrReplaceTempView("test_delta")
+    merge_query = """
+    MERGE INTO purgo_playground.sample_sales_data TARGET
+    USING test_delta SOURCE
+    ON TARGET.product_id = SOURCE.product_id
+    WHEN MATCHED THEN UPDATE SET TARGET.qty_sold = SOURCE.qty_sold + TARGET.qty_sold
+    WHEN NOT MATCHED THEN INSERT *
+    """
+    spark.sql(merge_query)
+    # Validate merge operation
+    result_df = spark.read.format("delta").table("purgo_playground.sample_sales_data")
+    assert result_df.count() == df.count(), "Mismatch in row count post MERGE operation"
 
-# Data Processing - Calculate Total Quantity Sold Per Product
-total_qty_df = df.groupBy("product_id").agg(Fsum("qty_sold").alias("total_qty"))
+# Window Function Test: Calculate total sales per product
+def test_total_sales_per_product():
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import sum as sql_sum
 
-# Delta Lake Integration
-delta_table_path = "path/to/delta_table"
-delta_table = DeltaTable.forPath(spark, delta_table_path)
+    window_spec = Window.partitionBy("product_id")
+    sales_df = df.withColumn("total_sales", sql_sum("qty_sold").over(window_spec))
+    expected_totals = {
+        'P1001': 150, 'P1002': 103, 'P1003': 70, 'P1004': 75
+    }
+    for product_id, total in expected_totals.items():
+        actual_total = sales_df.filter(col("product_id") == product_id).select("total_sales").first()[0]
+        assert actual_total == total, f"Incorrect total for product_id {product_id}: Expected {total}, Found {actual_total}"
 
-# Merge data into Delta table
-delta_table.alias("existing").merge(
-    df.alias("updates"),
-    "existing.product_id = updates.product_id"
-).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+# Streaming Test
+def test_streaming():
+    # Ingest as a streaming source
+    streaming_df = spark.readStream.format("delta").table("purgo_playground.sample_sales_data")
 
-# Optimize Delta Table by Z-Ordering on product_id
-spark.sql(f"OPTIMIZE delta.`{delta_table_path}` ZORDER BY (product_id)")
+    query = (
+        streaming_df.writeStream
+        .format("memory")  # MemoryStream for testing
+        .queryName("sales_stream")
+        .outputMode("append")
+        .start()
+    )
 
-# Vacuum Delta Table
-spark.sql(f"VACUUM delta.`{delta_table_path}`")
+    query.awaitTermination(timeout=10)
+    spark.sql("SELECT * FROM sales_stream").show()
+    assert spark.sql("SELECT COUNT(*) FROM sales_stream").collect()[0][0] == df.count()
+    query.stop()
 
-# Caching for performance
-df.cache()
-total_qty_df.cache()
+# Cleanup Test Data
+def cleanup_test_data():
+    spark.sql("DELETE FROM purgo_playground.sample_sales_data WHERE TRUE")
+
+# Run all tests
+def run_tests():
+    test_country_cd_format()
+    test_product_id_format()
+    test_qty_sold_positive()
+    test_sales_date_format()
+    test_schema()
+    test_delta_lake_operations()
+    test_total_sales_per_product()
+    test_streaming()
+    cleanup_test_data()
+
+# Execute tests
+try:
+    run_tests()
+    print("All tests passed successfully.")
+except AssertionError as e:
+    print(f"Test failed: {e}")
+finally:
+    spark.stop()
+
