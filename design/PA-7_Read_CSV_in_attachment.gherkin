@@ -1,75 +1,80 @@
-Feature: Unity Catalog Schema Design for purgo_playground
+Feature: Create and Utilize the purgo_playground Schema
+
+  The feature aims to outline the creation, integration, and usage of the 'purgo_playground' schema to analyze sales data effectively while ensuring compatibility, security, and comprehensive reporting. The schema must support different data processing needs based on user roles and access levels, ensuring accurate and timely data handling.
 
   Background:
-    Given the schema is named "purgo_playground"
-    And the context is to store sales data from multiple regions
+    Given the following list of contacts is available:
+      | Role              | Contact Person       |
+      | Project Manager   | Alex Johnson         |
+      | Data Architect    | Chris Wong           |
+      | Security Officer  | Maria Thomas         |
+      | Business Analyst  | Liam Clarke          |
 
-  Scenario: Create the schema with necessary tables
-    Given the database system supports Unity Catalog
-    When the schema "purgo_playground" is created
-    Then a table named "sales_data" should exist
-    And the table should have columns "country_cd", "product_id", "qty_sold", "sales_date"
-
-  Scenario Outline: Validate data values and formats for sales_data table
-    Given a new row is created in "sales_data" table
-    When the following data is inserted
-      | country_cd | product_id | qty_sold | sales_date |
-      | <country_cd> | <product_id> | <qty_sold> | <sales_date> |
-    Then the "country_cd" should be a valid ISO country code
-    And the "product_id" should match the format "P####" where #### is a number
-    And the "qty_sold" should be a positive integer
-    And the "sales_date" should follow the format "YYYY-MM-DD"
+  Scenario Outline: Verify successful integration with existing systems
+    Given the purpose of the 'purgo_playground' schema is defined as "<Purpose>"
+    And it integrates effectively with the current system "<System>"
+    When the schema is implemented
+    Then it should process "<Data_Type>" with "<Processing_Steps>"
+    And it should output "<Expected_Output>"
 
     Examples:
-      | country_cd | product_id | qty_sold | sales_date  |
-      | US         | P1001      | 50       | 2024-01-15  |
-      | CA         | P1003      | 25       | 2024-01-17  |
-      | UK         | P1004      | 20       | 2024-01-19  |
+      | Purpose         | System          | Data_Type              | Processing_Steps            | Expected_Output              |
+      | Sales Analysis  | Data Warehouse  | Transaction Data       | Aggregation, Validation     | Sales Report by Region      |
+      | Inventory Check | ERP System      | Product Inventory Data | Standardization, Cleansing  | Stock Status Overview       |
 
-  Scenario: Error when inserting invalid data in sales_data table
-    Given the table "sales_data" exists
-    When incorrect data with "country_cd" as "INVALID" is inserted
-    Then an error message "Invalid country code" should be displayed
+  Scenario: Validate user roles and access control
+    Given user roles are defined with the following access levels:
+      | Role       | Access Level |
+      | Admin      | Full Access  |
+      | Sales Lead | Read-Only    |
+      | Analyst    | Read-Write   |
+    And each role is granted correct schema permissions
+    When the users attempt to access data in purgo_playground
+    Then the schema should deny unauthorized access attempts from non-privileged users
+    And log the attempted breach with a message "Unauthorized access attempt detected"
 
-    When incorrect data with "product_id" as "1001" is inserted
-    Then an error message "Invalid product_id format, should be P####" should be displayed
-
-    When incorrect data with "qty_sold" as "-10" is inserted
-    Then an error message "Quantity sold must be a positive integer" should be displayed
-
-    When incorrect data with "sales_date" as "15-01-2024" is inserted
-    Then an error message "Invalid date format, should be YYYY-MM-DD" should be displayed
-
-  Scenario: Check user roles and access control
-    Given user roles are defined
-    When a user with role "analyst" accesses the schema
-    Then the user should have read-only permissions on "sales_data" table
-
-    When a user with role "admin" accesses the schema
-    Then the user should have read-write permissions on "sales_data" table
-
-  Scenario: Integration with existing systems
-    Given a connection to the existing data warehouse
-    When data is transferred to the "purgo_playground" schema
-    Then the data should comply with the defined formats and rules
-
-  Scenario Outline: Data update process and frequency
-    Given the existing data is present in the "sales_data" table
-    When new sales data is acquired
-    And the data update occurs with frequency "<frequency>"
-    Then the table should be updated accordingly
+  Scenario: Process and transform sales data correctly
+    Given sample sales data in .csv format is uploaded with correct column headers
+    When the system processes the data
+    Then each data field should adhere to the following validation rules:
+      | Field       | Validation Rule                     |
+      | country_cd  | Non-empty, ISO 3166-1 alpha-2 code |
+      | product_id  | Non-empty, starts with 'P'         |
+      | qty_sold    | Positive integer                   |
+      | sales_date  | YYYY-MM-DD format                  |
+    And if any rule is violated, return error message "<Error_Message>"
 
     Examples:
-      | frequency |
-      | daily     |
-      | weekly    |
+      | Field      | Error_Message                                      |
+      | country_cd | "Country code must be a valid ISO 3166-1 alpha-2"  |
+      | product_id | "Product ID must start with 'P'"                   |
+      | qty_sold   | "Quantity sold must be a positive integer"         |
+      | sales_date | "Sales date must follow the YYYY-MM-DD format"     |
 
-  Scenario: Generating reports from the schema
-    Given the schema "purgo_playground" is populated with data
-    When a report is generated on sales by country
-    Then the report should display correct and formatted data
+  Scenario: Ensure accurate reporting from processed data
+    Given sales data has been processed without errors
+    When the system generates reports
+    Then reports must include the following sections:
+      | Section           | Detail                            |
+      | Total Sales       | Aggregate by country and product  |
+      | Top Products      | Products with highest sales       |
+      | Sales by Region   | Breakdown by country              |
+    And reports should be exported in "<File_Format>"
 
-  Scenario: Project timeline and milestones
-    Given the project has defined objectives
-    When the project timeline is created
-    Then it should include key milestones for schema creation, data integration, and report generation
+    Examples:
+      | File_Format | 
+      | PDF         |
+      | Excel       |
+
+  Scenario: Handling data updates efficiently
+    Given the data update frequency is set to "daily"
+    And updates to schema are transmitted via "<Update_Method>"
+    When new sales data is available
+    Then data must be appended without redundancy
+    And ensure data integrity is maintained for all entries
+
+    Examples:
+      | Update_Method  |
+      | Data Streams   |
+      | Batch Process  |
+
