@@ -1,12 +1,11 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
-from pyspark.sql.functions import col, lit
-from datetime import datetime
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType
+from pyspark.sql.functions import lit
 
 # Initialize Spark session
 spark = SparkSession.builder.appName("TestDataGeneration").getOrCreate()
 
-# Define schema
+# Define schema for sales data based on Unity Catalog requirements
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -14,48 +13,50 @@ schema = StructType([
     StructField("sales_date", TimestampType(), True)
 ])
 
-# Happy path test data
+# Happy path test data (valid scenarios)
 happy_path_data = [
-    ("US", "P1001", 50, datetime.strptime("2024-03-21T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("CA", "P1003", 30, datetime.strptime("2024-03-22T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("UK", "P1004", 40, datetime.strptime("2024-03-23T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z"))
+    ("US", "P1001", 50, "2024-01-15T00:00:00.000+0000"),
+    ("US", "P1002", 30, "2024-01-16T00:00:00.000+0000"),
+    ("CA", "P1001", 40, "2024-01-15T00:00:00.000+0000"),
+    ("CA", "P1003", 25, "2024-01-17T00:00:00.000+0000")
 ]
 
 # Edge cases (boundary conditions)
-edge_case_data = [
-    ("IN", "P1000", 1, datetime.strptime("2024-01-01T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")), # Minimum qty_sold
-    ("AU", "P9999", 1000, datetime.strptime("2024-12-31T23:59:59.999+0000", "%Y-%m-%dT%H:%M:%S.%f%z")) # Maximum qty_sold
+edge_cases_data = [
+    ("XX", "P1005", 0, "2024-12-31T23:59:59.999+0000"),  # Invalid country code, zero quantity, max timestamp
+    ("ZZ", "P9999", 9999, "2024-01-01T00:00:00.000+0000")  # Another invalid country, high quantity, min timestamp
 ]
 
 # Error cases (invalid inputs)
-error_case_data = [
-    ("", "P1001", 20, datetime.strptime("2024-03-21T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")), # Missing country_cd
-    ("US", "1001", 50, datetime.strptime("2024-03-21T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")), # Invalid product_id
-    ("CA", "P1003", -1, datetime.strptime("2024-03-21T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")), # Negative quantity
-    ("UK", "P1004", 20, datetime.strptime("21st March 2024", "%dth %B %Y")) # Invalid date format
+error_cases_data = [
+    ("US", "P1001", -5, "2024-01-15T00:00:00.000+0000"),  # Negative quantity
+    ("UK", "INVALID", 10, "NOT_A_DATE")  # Invalid date
 ]
 
 # NULL handling scenarios
-null_scenario_data = [
-    (None, "P1005", 15, datetime.strptime("2024-04-01T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("EU", None, 70, datetime.strptime("2024-04-02T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("JP", "P1006", None, datetime.strptime("2024-04-03T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("KR", "P1007", 5, None)
+null_handling_data = [
+    (None, "P1002", 20, "2024-01-17T00:00:00.000+0000"),  # NULL country code
+    ("IN", "P1003", None, "2024-01-21T00:00:00.000+0000")  # NULL quantity
 ]
 
 # Special characters and multi-byte characters
-special_char_data = [
-    ("CN", "P1008", 100, datetime.strptime("2024-04-04T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("DE", "PX@#$", 75, datetime.strptime("2024-04-05T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("FR", "P1009", 60, datetime.strptime("2024-04-06T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z")),
-    ("JP", "P1010", 85, datetime.strptime("2024-04-07T00:00:00.000+0000", "%Y-%m-%dT%H:%M:%S.%f%z"))
+special_characters_data = [
+    ("CN", "P2002", 45, "2024-02-29T00:00:00.000+0000"),  # Leap year date
+    ("JP", "プロダクトID", 33, "2024-04-01T00:00:00.000+0000"),  # Product ID with multibyte character
 ]
 
 # Combine all test data
-all_test_data = happy_path_data + edge_case_data + error_case_data + null_scenario_data + special_char_data
+combined_data = happy_path_data + edge_cases_data + error_cases_data + null_handling_data + special_characters_data
 
 # Create DataFrame
-df = spark.createDataFrame(data=all_test_data, schema=schema)
+df = spark.createDataFrame(combined_data, schema)
 
 # Show DataFrame
 df.show(truncate=False)
+
+# Save to Databricks table (assuming Unity Catalog setup)
+df.write.mode("overwrite").format("delta").saveAsTable("purgo_playground.sales_data_test")
+
+# Stop Spark session
+spark.stop()
+
