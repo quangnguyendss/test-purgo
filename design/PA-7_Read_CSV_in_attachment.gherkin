@@ -1,80 +1,56 @@
-Feature: Create and Utilize the purgo_playground Schema
-
-  The feature aims to outline the creation, integration, and usage of the 'purgo_playground' schema to analyze sales data effectively while ensuring compatibility, security, and comprehensive reporting. The schema must support different data processing needs based on user roles and access levels, ensuring accurate and timely data handling.
+Feature: Purgo Playground Schema Validation
 
   Background:
-    Given the following list of contacts is available:
-      | Role              | Contact Person       |
-      | Project Manager   | Alex Johnson         |
-      | Data Architect    | Chris Wong           |
-      | Security Officer  | Maria Thomas         |
-      | Business Analyst  | Liam Clarke          |
+    Given the Unity Catalog Schema "purgo_playground" exists
+    And sample sales data is available as input
 
-  Scenario Outline: Verify successful integration with existing systems
-    Given the purpose of the 'purgo_playground' schema is defined as "<Purpose>"
-    And it integrates effectively with the current system "<System>"
-    When the schema is implemented
-    Then it should process "<Data_Type>" with "<Processing_Steps>"
-    And it should output "<Expected_Output>"
+  Scenario Outline: Successful Data Ingestion into Schema
+    Given the sales data "<country_cd>", "<product_id>", <qty_sold>, "<sales_date>"
+    When the data is ingested into schema "purgo_playground"
+    Then the data should be correctly stored in the schema
+    And the format should be validated for "<country_cd>", "<product_id>" identifiers
+    And the records should reflect accurate "<qty_sold>"
+    And the sales_date should be in YYYY-MM-DD format
+    
+    Examples:
+      | country_cd | product_id | qty_sold | sales_date  |
+      | US         | P1001      | 50       | 2024-01-15  |
+      | CA         | P1001      | 40       | 2024-01-15  |
+
+  Scenario: Error on Incorrect Data Format
+    Given the sales data "US", "P1001", "50", "15-01-2024" (incorrect date format)
+    When the data is ingested into schema "purgo_playground"
+    Then an error should occur with message "Invalid date format, expected YYYY-MM-DD"
+
+  Scenario: Handling Missing Data
+    Given the sales data "US", "P1001", (missing qty_sold), "2024-01-15"
+    When the data is ingested into schema "purgo_playground"
+    Then an error should occur with message "Missing quantity sold information"
+
+  Scenario: Access Control Validation
+    Given a user with the role "<role>"
+    When the user tries to access the schema "purgo_playground"
+    Then access should be "<access_permission>"
 
     Examples:
-      | Purpose         | System          | Data_Type              | Processing_Steps            | Expected_Output              |
-      | Sales Analysis  | Data Warehouse  | Transaction Data       | Aggregation, Validation     | Sales Report by Region      |
-      | Inventory Check | ERP System      | Product Inventory Data | Standardization, Cleansing  | Stock Status Overview       |
+      | role        | access_permission |
+      | admin       | granted           |
+      | analyst     | granted           |
+      | viewer      | granted           |
+      | guest       | denied            |
 
-  Scenario: Validate user roles and access control
-    Given user roles are defined with the following access levels:
-      | Role       | Access Level |
-      | Admin      | Full Access  |
-      | Sales Lead | Read-Only    |
-      | Analyst    | Read-Write   |
-    And each role is granted correct schema permissions
-    When the users attempt to access data in purgo_playground
-    Then the schema should deny unauthorized access attempts from non-privileged users
-    And log the attempted breach with a message "Unauthorized access attempt detected"
-
-  Scenario: Process and transform sales data correctly
-    Given sample sales data in .csv format is uploaded with correct column headers
-    When the system processes the data
-    Then each data field should adhere to the following validation rules:
-      | Field       | Validation Rule                     |
-      | country_cd  | Non-empty, ISO 3166-1 alpha-2 code |
-      | product_id  | Non-empty, starts with 'P'         |
-      | qty_sold    | Positive integer                   |
-      | sales_date  | YYYY-MM-DD format                  |
-    And if any rule is violated, return error message "<Error_Message>"
-
+  Scenario: Data Integrity and Consistency Check
+    Given the sales data is ingested into "purgo_playground"
+    When a query aggregates sales qty_sold by product_id
+    Then the sum for product_id "P1001" should match the expected total <expected_qty_total>
+    
     Examples:
-      | Field      | Error_Message                                      |
-      | country_cd | "Country code must be a valid ISO 3166-1 alpha-2"  |
-      | product_id | "Product ID must start with 'P'"                   |
-      | qty_sold   | "Quantity sold must be a positive integer"         |
-      | sales_date | "Sales date must follow the YYYY-MM-DD format"     |
+      | product_id | expected_qty_total |
+      | P1001      | 150                |
+      | P1002      | 68                 |
 
-  Scenario: Ensure accurate reporting from processed data
-    Given sales data has been processed without errors
-    When the system generates reports
-    Then reports must include the following sections:
-      | Section           | Detail                            |
-      | Total Sales       | Aggregate by country and product  |
-      | Top Products      | Products with highest sales       |
-      | Sales by Region   | Breakdown by country              |
-    And reports should be exported in "<File_Format>"
-
-    Examples:
-      | File_Format | 
-      | PDF         |
-      | Excel       |
-
-  Scenario: Handling data updates efficiently
-    Given the data update frequency is set to "daily"
-    And updates to schema are transmitted via "<Update_Method>"
-    When new sales data is available
-    Then data must be appended without redundancy
-    And ensure data integrity is maintained for all entries
-
-    Examples:
-      | Update_Method  |
-      | Data Streams   |
-      | Batch Process  |
+  Scenario: Update Frequency Validation
+    Given the sales data is updated weekly
+    When new sales data arrives for the week
+    Then the schema "purgo_playground" should reflect the updated data within 24 hours
 
