@@ -1,0 +1,95 @@
+Feature: Data Validation for Unity Catalog Schema 'purgo_playground'
+
+  Background:
+    Given a sample sales data file "sample_sales_data.csv" exists with columns:
+      | country_cd   | product_id | qty_sold | sales_date  |
+
+  Scenario Outline: Validate data entries in the sales data
+    Given the sales data file is loaded
+    When validating the data entries for <column>
+    Then the data <should|should not> conform to the format rules:
+      | column     | format                                |
+      | country_cd | Non-empty String, length 2            |
+      | product_id | Starts with 'P', followed by 4 digits |
+      | qty_sold   | Integer, greater than 0              |
+      | sales_date | YYYY-MM-DD, valid date               |
+
+    Examples:
+      | column     | should      |
+      | country_cd | should      |
+      | product_id | should      |
+      | qty_sold   | should      |
+      | sales_date | should      |
+
+  Scenario: Check missing fields in schema
+    Given the schema 'purgo_playground' is proposed
+    When reviewing the design
+    Then the following requirements must be addressed:
+      | Requirement                           |
+      | Purpose and objectives                |
+      | Data flow and integration points      |
+      | User roles and access control         |
+      | Data processing or transformations    |
+      | Expected outputs or reports           |
+      | Data update frequency and methods     |
+      | Project timeline and milestones       |
+
+  Scenario Outline: Validate error scenarios for incorrect data
+    Given a row has <error_condition>
+    When processing the data entry
+    Then an error message should be displayed: <error_message>
+
+    Examples:
+      | error_condition                | error_message                        |
+      | missing country code           | "Error: Country code is required"    |
+      | invalid product ID format      | "Error: Product ID must start with 'P' followed by 4 digits" |
+      | negative quantity sold         | "Error: Quantity sold must be positive" |
+      | invalid date format            | "Error: Date must be in format YYYY-MM-DD" |
+
+  Scenario: Validate accessibility and roles
+    Given the schema 'purgo_playground' will be developed
+    When defining roles and access levels
+    Then the following roles should have access with conditions:
+      | Role          | Access Level               |
+      | Data Analyst  | Read-only                  |
+      | Data Engineer | Read-write for integration |
+      | Admin         | Full access                |
+
+  Scenario: Ensure data update frequency compliance
+    Given the sales data is updated regularly
+    When defining update frequencies
+    Then the schema should support data updates every <frequency> using <method>
+
+    Examples:
+      | frequency | method             |
+      | daily     | Scheduled batch    |
+      | real-time | Streaming updates  |
+
+  Scenario: Define expected outputs from the schema
+    Given the schema 'purgo_playground' is used for analysis
+    When generating reports
+    Then the following outputs should be expected:
+      | Output             |
+      | Sales by country   |
+      | Sales by product   |
+      | Total sales summary|
+
+  Scenario: Integration with existing systems
+    Given the schema needs to integrate with existing systems
+    When designing integration points
+    Then it should support data flow compatibility with:
+      | System          |
+      | Data Warehouse  |
+      | ETL pipelines   |
+      | Reporting tools |
+
+  Scenario: Identify and include milestones in project timeline
+    Given the implementation roadmap
+    When planning the project
+    Then include critical milestones such as:
+      | Milestone                        |
+      | Schema design completion         |
+      | Initial data integration         |
+      | First report generation          |
+      | Go-live                          |
+
