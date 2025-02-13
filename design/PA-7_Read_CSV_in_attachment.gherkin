@@ -1,56 +1,72 @@
-Feature: Purgo Playground Schema Validation
+Feature: Unity Catalog Schema Design for purgo_playground
 
   Background:
-    Given the Unity Catalog Schema "purgo_playground" exists
-    And sample sales data is available as input
+    Given the sample sales data is loaded from "sample_sales_data.csv"
+    And the source data contains fields: country_cd, product_id, qty_sold, sales_date
 
-  Scenario Outline: Successful Data Ingestion into Schema
-    Given the sales data "<country_cd>", "<product_id>", <qty_sold>, "<sales_date>"
-    When the data is ingested into schema "purgo_playground"
-    Then the data should be correctly stored in the schema
-    And the format should be validated for "<country_cd>", "<product_id>" identifiers
-    And the records should reflect accurate "<qty_sold>"
-    And the sales_date should be in YYYY-MM-DD format
-    
-    Examples:
+  # Happy Path Scenarios
+  Scenario: Successful schema creation for purgo_playground
+    Given I have the objectives and purpose for the schema
+    And I understand the expected data flow and integration
+    And user roles along with the required access levels are defined
+    And I know the necessary data processing and transformations
+    And expected outputs or reports from the schema are outlined
+    And I have the data update frequency and methods
+    When I create the purgo_playground schema
+    Then the schema should be compliant with all the outlined objectives
+    And all user roles have appropriate access privileges
+    And the schema integrates seamlessly with existing systems
+    And data processing occurs as expected producing correct outputs
+
+  Scenario Outline: Data-driven validation of schema fields
+    Given I am validating the schema with the following data
       | country_cd | product_id | qty_sold | sales_date  |
-      | US         | P1001      | 50       | 2024-01-15  |
-      | CA         | P1001      | 40       | 2024-01-15  |
-
-  Scenario: Error on Incorrect Data Format
-    Given the sales data "US", "P1001", "50", "15-01-2024" (incorrect date format)
-    When the data is ingested into schema "purgo_playground"
-    Then an error should occur with message "Invalid date format, expected YYYY-MM-DD"
-
-  Scenario: Handling Missing Data
-    Given the sales data "US", "P1001", (missing qty_sold), "2024-01-15"
-    When the data is ingested into schema "purgo_playground"
-    Then an error should occur with message "Missing quantity sold information"
-
-  Scenario: Access Control Validation
-    Given a user with the role "<role>"
-    When the user tries to access the schema "purgo_playground"
-    Then access should be "<access_permission>"
-
-    Examples:
-      | role        | access_permission |
-      | admin       | granted           |
-      | analyst     | granted           |
-      | viewer      | granted           |
-      | guest       | denied            |
-
-  Scenario: Data Integrity and Consistency Check
-    Given the sales data is ingested into "purgo_playground"
-    When a query aggregates sales qty_sold by product_id
-    Then the sum for product_id "P1001" should match the expected total <expected_qty_total>
+      | <country>  | <product>  | <qty>    | <date>      |
+    When I check the field <field>
+    Then the data must conform to the expected format
     
     Examples:
-      | product_id | expected_qty_total |
-      | P1001      | 150                |
-      | P1002      | 68                 |
+      | field       | country | product | qty | date       |
+      | country_cd  | US      | P1001   | 50  | 2024-01-15 |
+      | product_id  | CA      | P1003   | 25  | 2024-01-17 |
+      | qty_sold    | UK      | P1002   | 35  | 2024-01-18 |
+      | sales_date  | IN      | P1001   | 60  | 2024-01-20 |
 
-  Scenario: Update Frequency Validation
-    Given the sales data is updated weekly
-    When new sales data arrives for the week
-    Then the schema "purgo_playground" should reflect the updated data within 24 hours
+  # Error Scenarios
+  Scenario: Schema creation failure due to missing objectives
+    Given the objectives for the purgo_playground schema are not defined
+    When I attempt to create the schema
+    Then the system should prevent creation
+    And I should see an error message "Schema creation failed: Objectives undefined."
+
+  Scenario: Access control violation
+    Given the schema is created successfully
+    And user roles and access levels are incorrectly defined
+    When a user tries to access restricted data
+    Then access should be denied
+    And the error message "Access denied: insufficient privileges" should be displayed
+
+  Scenario: Data processing error due to incorrect transformation rules
+    Given I have defined incorrect data transformation rules
+    When I execute the data processing on the schema
+    Then the process should fail
+    And an error message "Data processing error: Transformation rules error" should be shown
+
+  # Technical Details
+  Scenario: Validate data type and format
+    Given the sample_sales_data.csv is available
+    When I validate the data types
+    Then country_cd should be a string of length 2
+    And product_id should be a string prefixed with 'P'
+    And qty_sold should be an integer
+    And sales_date should be in the format YYYY-MM-DD
+
+  Scenario: Scheduled data updates are applied
+    Given the data update frequency is daily
+    And the update method is batch processing at midnight
+    When the update occurs
+    Then the new data should be available in the schema the next morning
+    And no data loss should occur
+
+  # Examples for multiple test cases are included inline as per Scenario Outline.
 
