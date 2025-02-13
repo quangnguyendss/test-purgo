@@ -1,72 +1,56 @@
-Feature: Unity Catalog Schema Design for purgo_playground
+Feature: Sales Data Processing in Unity Catalog Schema "purgo_playground"
 
   Background:
-    Given the sample sales data is loaded from "sample_sales_data.csv"
-    And the source data contains fields: country_cd, product_id, qty_sold, sales_date
-
-  # Happy Path Scenarios
-  Scenario: Successful schema creation for purgo_playground
-    Given I have the objectives and purpose for the schema
-    And I understand the expected data flow and integration
-    And user roles along with the required access levels are defined
-    And I know the necessary data processing and transformations
-    And expected outputs or reports from the schema are outlined
-    And I have the data update frequency and methods
-    When I create the purgo_playground schema
-    Then the schema should be compliant with all the outlined objectives
-    And all user roles have appropriate access privileges
-    And the schema integrates seamlessly with existing systems
-    And data processing occurs as expected producing correct outputs
-
-  Scenario Outline: Data-driven validation of schema fields
-    Given I am validating the schema with the following data
+    Given the sample_sales_data.csv file is available 
       | country_cd | product_id | qty_sold | sales_date  |
-      | <country>  | <product>  | <qty>    | <date>      |
-    When I check the field <field>
-    Then the data must conform to the expected format
-    
+      | US         | P1001      | 50       | 2024-01-15  |
+      | US         | P1002      | 30       | 2024-01-16  |
+      | CA         | P1001      | 40       | 2024-01-15  |
+      | CA         | P1003      | 25       | 2024-01-17  |
+      | UK         | P1002      | 35       | 2024-01-18  |
+      | UK         | P1004      | 20       | 2024-01-19  |
+      | IN         | P1001      | 60       | 2024-01-20  |
+      | IN         | P1003      | 45       | 2024-01-21  |
+      | AU         | P1004      | 55       | 2024-01-22  |
+      | AU         | P1002      | 38       | 2024-01-23  |
+    And the data format is CSV
+    And the data schema in the Unity Catalog is "purgo_playground"
+
+  Scenario Outline: Successful Sales Data Import
+    Given a CSV file with sales data is present
+    When the data is imported to the Unity Catalog Schema "purgo_playground"
+    Then the data should be present in the "sales_data" table
+    And the data should match the format:
+      | country_cd Varchar(2) | product_id Varchar(10) | qty_sold Integer | sales_date Date |
     Examples:
-      | field       | country | product | qty | date       |
-      | country_cd  | US      | P1001   | 50  | 2024-01-15 |
-      | product_id  | CA      | P1003   | 25  | 2024-01-17 |
-      | qty_sold    | UK      | P1002   | 35  | 2024-01-18 |
-      | sales_date  | IN      | P1001   | 60  | 2024-01-20 |
+      | file_path                |
+      | sample_sales_data.csv    |
 
-  # Error Scenarios
-  Scenario: Schema creation failure due to missing objectives
-    Given the objectives for the purgo_playground schema are not defined
-    When I attempt to create the schema
-    Then the system should prevent creation
-    And I should see an error message "Schema creation failed: Objectives undefined."
+  Scenario: Validation of Imported Data
+    Given the sales data has been imported
+    When querying for total product sales
+    Then the sum of "qty_sold" should match expected values per product ID
+    | product_id | expected_qty_sold |
+    | P1001      | 150               |
+    | P1002      | 103               |
+    | P1003      | 70                |
+    | P1004      | 75                |
 
-  Scenario: Access control violation
-    Given the schema is created successfully
-    And user roles and access levels are incorrectly defined
-    When a user tries to access restricted data
-    Then access should be denied
-    And the error message "Access denied: insufficient privileges" should be displayed
+  Scenario: Error Handling for Incorrect Data Format
+    Given a CSV file with incorrect data format
+    When trying to import this data
+    Then an error should occur
+    And the error message should be "Data Format Error: Invalid data format for sales_date"
+    Examples:
+      | file_path                     | incorrect_format                                       |
+      | incorrect_sales_data.csv      | "country_cd, product_id, qty_sold, incorrect_date"     |
 
-  Scenario: Data processing error due to incorrect transformation rules
-    Given I have defined incorrect data transformation rules
-    When I execute the data processing on the schema
-    Then the process should fail
-    And an error message "Data processing error: Transformation rules error" should be shown
-
-  # Technical Details
-  Scenario: Validate data type and format
-    Given the sample_sales_data.csv is available
-    When I validate the data types
-    Then country_cd should be a string of length 2
-    And product_id should be a string prefixed with 'P'
-    And qty_sold should be an integer
-    And sales_date should be in the format YYYY-MM-DD
-
-  Scenario: Scheduled data updates are applied
-    Given the data update frequency is daily
-    And the update method is batch processing at midnight
-    When the update occurs
-    Then the new data should be available in the schema the next morning
-    And no data loss should occur
-
-  # Examples for multiple test cases are included inline as per Scenario Outline.
+  Scenario: Error Handling for Missing Required Field
+    Given a CSV file with missing fields
+    When trying to import this data
+    Then an error should occur
+    And the error message should be "Data Import Error: Missing required field 'qty_sold'"
+    Examples:
+      | file_path                         | missing_field                                |
+      | missing_qty_sold_data.csv         | "country_cd, product_id, sales_date"         |
 
