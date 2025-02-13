@@ -1,18 +1,12 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
+from pyspark.sql.functions import col, sum as _sum
 from delta.tables import DeltaTable
-from pyspark.sql import functions as F
-import os
 
-# Initialize Spark session with Delta support
-spark = SparkSession.builder \
-    .appName("SalesDataProcessing") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .enableHiveSupport() \
-    .getOrCreate()
+# Create a Spark session
+spark = SparkSession.builder.appName("Sales Data Processing").getOrCreate()
 
-# Define schema for CSV
+# Define schema
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -20,59 +14,57 @@ schema = StructType([
     StructField("sales_date", DateType(), True)
 ])
 
-input_path = "dbfs:/mnt/<your_mount>/sample_sales_data.csv"
-output_table = "purgo_playground.sales_data"
+# Load data
+file_path = "/path/to/sample_sales_data.csv"
+sales_df = spark.read.csv(file_path, schema=schema, header=True)
 
-# Read CSV file with schema
-df = spark.read.format("csv").option("header", "true").schema(schema).load(input_path)
-
-# Convert sales_date to date format
-df = df.withColumn("sales_date", F.to_date(df["sales_date"], "yyyy-MM-dd"))
-
-# Write data to Delta
-df.write.format("delta").mode("overwrite").saveAsTable(output_table)
-
-# Implement Delta Lake operations
-# Add a new record for validation
-new_data = [("US", "P1001", 10, "2024-01-24")]
-new_df = spark.createDataFrame(new_data, schema)
-
-delta_table = DeltaTable.forName(spark, output_table)
-
-# Merge operation for Delta Lake
-delta_table.alias("target").merge(
-    new_df.alias("source"),
-    "target.country_cd = source.country_cd AND target.product_id = source.product_id"
-).whenMatchedUpdate(
-    set={"qty_sold": "target.qty_sold + source.qty_sold"}
-).whenNotMatchedInsert(
-    values={
-        "country_cd": "source.country_cd",
-        "product_id": "source.product_id",
-        "qty_sold": "source.qty_sold",
-        "sales_date": "source.sales_date"
-    }
-).execute()
-
-# Optimize and vacuum Delta table
-spark.sql(f"OPTIMIZE {output_table} ZORDER BY (product_id)")
-spark.sql(f"VACUUM {output_table} RETAIN 0 HOURS")
-
-# Perform data quality checks
-df_with_checks = df.withColumn("is_valid", F.when(df["qty_sold"].isNull(), F.lit(False)).otherwise(F.lit(True)))
-invalid_records = df_with_checks.filter(df_with_checks["is_valid"] == False).count()
-
-# Implement caching strategy
-df.unpersist()
-df.cache()
-
-# Error handling and logging (basic example)
+# Handle errors for incorrect formats
 try:
-    # Simulate data processing step
-    df_processed = df.withColumn("discounted_qty", df["qty_sold"] * 0.9)
+    sales_df = sales_df.withColumn("sales_date", col("sales_date").cast(DateType()))
 except Exception as e:
-    print(f"Error encountered: {e}")
+    print("Data Format Error: Invalid data format for sales_date", str(e))
+    raise
 
-# Stop the Spark session
+# Filter out rows with null values in crucial columns
+sales_df = sales_df.dropna(subset=["country_cd", "product_id", "qty_sold"])
+
+# Write to Delta Lake
+delta_table_path = f"/mnt/delta/purgo_playground/sales_data_delta"
+sales_df.write.format("delta").mode("overwrite").save(delta_table_path)
+
+# Verify by reading from Delta Lake
+sales_delta_df = spark.read.format("delta").load(delta_table_path)
+sales_delta_df.createOrReplaceTempView("sales_data_delta")
+
+# Validate data integrity
+product_sales_check = spark.sql("""
+    SELECT product_id, SUM(qty_sold) AS total_qty_sold
+    FROM sales_data_delta
+    GROUP BY product_id
+""")
+expected_sales = [("P1001", 150), ("P1002", 103), ("P1003", 70), ("P1004", 75)]
+expected_df = spark.createDataFrame(expected_sales, schema=["product_id", "total_qty_sold"])
+assert product_sales_check.collect() == expected_df.collect(), "Data integrity check failed."
+
+# Demonstrate Delta Lake time travel (reading history)
+historical_sales_df = spark.read.format("delta").option("versionAsOf", 0).load(delta_table_path)
+
+# Perform Delta Lake merge operation
+merge_data = [("US", "P1001", 70, "2024-01-15")]
+merge_df = spark.createDataFrame(merge_data, schema=schema)
+merge_df.createOrReplaceTempView("merge_data")
+
+DeltaTable.forPath(spark, delta_table_path).alias("target").merge(
+    merge_df.alias("source"),
+    "target.country_cd = source.country_cd AND target.product_id = source.product_id"
+).whenMatchedUpdate(set={"qty_sold": "source.qty_sold"}).whenNotMatchedInsertAll().execute()
+
+# Optimize and vacuum the Delta table
+spark.sql(f"OPTIMIZE '{delta_table_path}' ZORDER BY (country_cd, product_id)")
+spark.sql(f"VACUUM '{delta_table_path}' RETAIN 168 HOURS")
+
+# Performance optimization: Cache the DataFrame
+sales_delta_df.cache()
+
+# Stop Spark session
 spark.stop()
-
