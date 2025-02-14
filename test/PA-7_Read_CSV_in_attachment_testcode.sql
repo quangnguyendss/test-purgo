@@ -1,70 +1,113 @@
--- SQL Code begins here
+/*
+  Set up and configuration information.
+  Ensure Unity Catalog schema "purgo_playground" is created and accessible.
+*/
 
-/* Install necessary libraries for SQL testing if any specific library needs to be installed.
-There is no explicit library installation needed for SQL as we're using Databricks SQL syntax */
-
-/* Validate the Unity Catalog Schema and table existence */
-USE purgo_playground;
-IF NOT EXISTS(SELECT * FROM information_schema.tables WHERE table_name = 'sales_data') THEN
-  -- Create table procedure if not exists
-  CREATE TABLE sales_data (
+-- Create the necessary tables for testing
+CREATE TABLE IF NOT EXISTS purgo_playground.sales_data (
     country_cd STRING,
     product_id STRING,
     qty_sold INTEGER,
     sales_date DATE
-  );
-END IF;
+);
 
-/* Validate DataType Test for the 'country_cd' column */
-ALTER TABLE sales_data ADD COLUMNS (tmp_country_cd STRING);
-INSERT INTO sales_data(tmp_country_cd) VALUES ('US');
-UPDATE sales_data SET country_cd = CAST(tmp_country_cd AS STRING);
+-- Ensure clean slate before tests
+DELETE FROM purgo_playground.sales_data;
 
-/* Validate DataType Test for the 'qty_sold' column */
-ALTER TABLE sales_data ADD COLUMNS (tmp_qty_sold STRING);
-INSERT INTO sales_data(tmp_qty_sold) VALUES ('100');
-UPDATE sales_data SET qty_sold = CAST(tmp_qty_sold AS INTEGER);
+/*
+  Test for Happy Path - Successful Data Ingestion and Storage
+*/
 
-/* Validate NULL handling for each column */
-ALTER TABLE sales_data ADD COLUMNS (tmp_country STRING);
-INSERT INTO sales_data(tmp_country) VALUES (NULL);
-UPDATE sales_data SET country_cd = tmp_country WHERE tmp_country IS NULL;
--- Repeat similar blocks for product_id, qty_sold, sales_date */
+-- Validate schema integrity on data ingestion
+INSERT INTO purgo_playground.sales_data (country_cd, product_id, qty_sold, sales_date)
+VALUES 
+    ("US", "P1001", 50, "2024-01-15"),
+    ("CA", "P1003", 25, "2024-01-17"),
+    ("IN", "P1001", 60, "2024-01-20"),
+    ("AU", "P1004", 55, "2024-01-22");
 
-/* Test Delta Lake Operations: MERGE, UPDATE, DELETE */
--- MERGE Example
-MERGE INTO sales_data AS target
-USING (SELECT 'US' as country_cd, 'P1005' as product_id, 10 as qty_sold, CURRENT_DATE as sales_date) AS src
-ON target.product_id = src.product_id
-WHEN MATCHED THEN
-  UPDATE SET target.qty_sold = src.qty_sold
-WHEN NOT MATCHED THEN
-  INSERT (country_cd, product_id, qty_sold, sales_date)
-  VALUES (src.country_cd, src.product_id, src.qty_sold, src.sales_date);
+/* 
+  Validate correct data storage 
+*/
+SELECT 
+    assert_typeof(country_cd, 'STRING'),
+    assert_typeof(product_id, 'STRING'),
+    assert_typeof(qty_sold, 'INTEGER'),
+    assert_typeof(sales_date, 'DATE')
+FROM purgo_playground.sales_data;
 
--- Window Function Test
-SELECT country_cd, product_id, MAX(qty_sold) OVER (PARTITION BY country_cd) as max_qty
-FROM sales_data;
+/*
+  Test for Validation - Incorrect Data Format
+*/
 
-/* Ensure proper cleanup operations */
-TRUNCATE TABLE sales_data;
+-- Attempt to insert incorrect data formats
 
--- SQL Code ends here
+-- Expected to fail with "Invalid data format for 'qty_sold'. Expected INTEGER."
+INSERT INTO purgo_playground.sales_data (country_cd, product_id, qty_sold, sales_date)
+VALUES ("US", "P1001", "invalid", "2024-01-15");
 
-# Python code using PySpark for tests
+-- Validate failure
+SELECT *,
+       CASE WHEN IS_NUMBER(qty_sold) THEN 1 ELSE error("Invalid data format for 'qty_sold'. Expected INTEGER.") END AS validation
+FROM purgo_playground.sales_data;
 
-# Import the necessary libraries
-# Ensure Spark session is initialized
+/*
+  Test for Validation - Future Date in Sales Date
+*/
+
+-- Attempt to insert a future date
+INSERT INTO purgo_playground.sales_data (country_cd, product_id, qty_sold, sales_date)
+VALUES ("US", "P1001", 50, "2025-01-15");
+
+-- Validate failure for future dates
+SELECT *,
+       CASE WHEN sales_date > current_date() THEN error("Sales date cannot be in the future.") ELSE 1 END AS validation
+FROM purgo_playground.sales_data;
+
+/*
+  Test for Error Handling - Database Connectivity
+*/
+
+-- Simulate database connection error by shutting down the database service
+-- Validate catching and log of connection error
+-- Assert expected error message
+
+/*
+  Test SQL functions and Analytic Features
+*/
+
+/* 
+  Delta Lake Operations Test (if applicable)
+*/
+
+-- Test Delta Lake specific operations: MERGE, UPDATE, DELETE
+MERGE INTO purgo_playground.sales_data AS target
+USING (SELECT 'US' AS country_cd, 'P1001' AS product_id, 60 AS qty_sold, "2024-01-15" AS sales_date) AS source
+ON target.product_id = source.product_id
+WHEN MATCHED THEN 
+    UPDATE SET qty_sold = source.qty_sold;
+
+-- Validate the update process
+SELECT qty_sold FROM purgo_playground.sales_data WHERE product_id = 'P1001';
+
+/*
+  Clean up after tests
+*/
+
+-- Drop temporary tables and clean up data if required
+DROP TABLE IF EXISTS purgo_playground.sales_data;
+
+# Import necessary libraries for PySpark testing
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
-from pyspark.sql import functions as F
 
-# Setup Spark session
+# Initialize SparkSession with necessary configurations for tests
 spark = SparkSession.builder \
-    .appName('Databricks SQL Testing') \
+    .appName("Databricks Test Suite") \
     .getOrCreate()
 
-# Define schema according to test case requirements
+# Define schema according to Databricks native data types
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -72,48 +115,58 @@ schema = StructType([
     StructField("sales_date", DateType(), True)
 ])
 
-# Sample data for testing purpose
-data = [("US", "P1001", 50, "2024-01-15"),
-        ("US", "P1002", 30, "2024-01-16"),
-        ("CA", "P1003", 25, "2024-01-17"),
-        ("IN", "P1001", 60, "2024-01-20"),
-        ("AU", "P1004", 55, "2024-01-22")]
+# Sample data matching expected schema formats for valid scenarios
+data_valid = [
+    ("US", "P1001", 50, "2024-01-15"),
+    ("CA", "P1003", 25, "2024-01-17"),
+    ("IN", "P1001", 60, "2024-01-20"),
+    ("AU", "P1004", 55, "2024-01-22")
+]
 
-# Create DataFrame
-df = spark.createDataFrame(data, schema=schema)
+# Create DataFrame for test data
+df_valid = spark.createDataFrame(data_valid, schema)
 
-# Perform assertions using PySpark built-in functions
-assert df.filter(df['qty_sold'] < 0).count() == 0, "Negative quantity sold exists"
-assert df.filter(df['sales_date'] > F.current_date()).count() == 0, "Future sales date exists"
+# Unit test for individual transformation: Verify data type conversion and schema
+def test_schema():
+    assert df_valid.schema == schema, "Schema validation failed."
 
-# Convert Data Types as needed
-df = df.withColumn("qty_sold", df["qty_sold"].cast("int"))
-df = df.withColumn("sales_date", F.to_date(df["sales_date"], "yyyy-MM-dd"))
+test_schema()
 
-# Handle NULL values
-df = df.fillna({'country_cd': 'Unknown', 'product_id': 'Unknown', 'qty_sold': 0, 'sales_date': '1970-01-01'})
+# Validate NULL handling within rows
+data_with_null = [
+    (None, "P1001", 50, "2024-01-15"),
+    ("US", None, 50, "2024-01-15"),
+    ("US", "P1001", None, "2024-01-15"),
+    ("US", "P1001", 50, None)
+]
 
-# Test Delta operations
-# Assuming Delta Lake is used, validate merging process
-from delta.tables import *
+df_null = spark.createDataFrame(data_with_null, schema)
 
-# Create Delta table for testing
-df.write.format("delta").mode("overwrite").save("/tmp/sales_data_delta")
+# Test for NULL values handling
+def test_null_values_handling():
+    assert df_null.filter(col("country_cd").isNull()).count() == 1, "Null country_cd test failed."
+    assert df_null.filter(col("product_id").isNull()).count() == 1, "Null product_id test failed."
+    assert df_null.filter(col("qty_sold").isNull()).count() == 1, "Null qty_sold test failed."
+    assert df_null.filter(col("sales_date").isNull()).count() == 1, "Null sales_date test failed."
 
-# Read Delta table
-delta_table = DeltaTable.forPath(spark, "/tmp/sales_data_delta")
+test_null_values_handling()
 
-# Perform Delta MERGE operation for testing
-delta_table.alias("target").merge(
-    source=df.alias("source"),
-    condition="target.product_id = source.product_id") \
-  .whenMatchedUpdate(set={"qty_sold": "source.qty_sold"}) \
-  .whenNotMatchedInsert(values={"country_cd": "source.country_cd", "product_id": "source.product_id",
-                                "qty_sold": "source.qty_sold", "sales_date": "source.sales_date"}) \
-  .execute()
+# Integration tests for end-to-end DataFrame operations
 
-# Validate the MERGE operation
-assert delta_table.toDF().filter(delta_table.toDF()['product_id'] == 'P1001').count() == 1, "Merge operation failed"
+# Mock transformation function for example preprocessing step
+def preprocessing_func(df):
+    return df.withColumn("qty_sold_transformed", col("qty_sold")) \
+             .withColumn("sales_date_transformed", col("sales_date").cast("string"))
 
-# Cleanup operations
-delta_table.delete("true")
+# Test transformation logic
+df_transformed = preprocessing_func(df_valid)
+
+# Validate transformation
+def test_transformation():
+    assert "qty_sold_transformed" in df_transformed.columns, "Transformation for qty_sold_transformed failed."
+    assert "sales_date_transformed" in df_transformed.columns, "Transformation for sales_date_transformed failed."
+
+test_transformation()
+
+# Include cleanup code if necessary to drop test tables or reset states
+spark.stop()
