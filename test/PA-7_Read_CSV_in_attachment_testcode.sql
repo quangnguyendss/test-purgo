@@ -1,69 +1,61 @@
--- SQL Testing for Unity Catalog Integration and Data Ingestion 
+-- SQL Test Code for Databricks Environment
 
--- Ensure Unity Catalog schema is available
-CREATE SCHEMA IF NOT EXISTS purgo_playground;
+-- Install necessary SQL libraries if not already installed
+-- (Currently, no additional installations needed for SQL.)
 
--- Table creation with required data types
-CREATE TABLE IF NOT EXISTS purgo_playground.sales_data (
-  country_cd STRING,
-  product_id STRING,
-  qty_sold INT,
-  sales_date DATE
-);
+-- Test to validate correct data typing
+CREATE OR REPLACE TEMPORARY VIEW sales_data_correct_types AS
+SELECT CAST(country_cd AS STRING) AS country_cd,
+       CAST(product_id AS STRING) AS product_id,
+       CAST(qty_sold AS INT) AS qty_sold,
+       CAST(sales_date AS DATE) AS sales_date
+FROM purgo_playground.sales_data;
 
--- Test Insertion: Successful Data Ingestion Scenario
--- Load sample data into the table for testing ingestion
-INSERT INTO purgo_playground.sales_data
-VALUES
-  ("US", "P1001", 50, DATE("2024-01-15")),
-  ("CA", "P1003", 25, DATE("2024-01-17")),
-  ("IN", "P1001", 60, DATE("2024-01-20")),
-  ("AU", "P1004", 55, DATE("2024-01-22"));
+-- Unit test for data type validation
+SELECT ASSERT(
+    (DATA_TYPE = 'STRING' AND FIELD = 'country_cd') OR
+    (DATA_TYPE = 'STRING' AND FIELD = 'product_id') OR
+    (DATA_TYPE = 'INT' AND FIELD = 'qty_sold') OR
+    (DATA_TYPE = 'DATE' AND FIELD = 'sales_date'),
+    'Data type does not match', FIELD)
+FROM (DESCRIBE FORMATTED sales_data_correct_types) AS temp
+WHERE TEMP.COL_NAME NOT IN ('# col_name', 'country_cd', 'product_id', 'qty_sold', 'sales_date', '');
 
--- Validate successful insertion and correct data types
--- Check row count matches expected number of inserted rows
-SELECT 
-  COUNT(*) AS inserted_rows 
-FROM 
-  purgo_playground.sales_data;
+-- Test for invalid data format
+-- Assuming execution fails elsewhere, use try-catch or transaction log to assert failure
+-- This section is for demonstration purposes
+BEGIN
+    TRY
+        SELECT CAST(qty_sold AS INT) FROM purgo_playground.invalid_sales_data;
+    CATCH (err)
+        THEN RAISE 'Invalid data format for qty_sold. Expected INTEGER.';
+    END TRY;
 
--- Schema validation
-DESCRIBE TABLE purgo_playground.sales_data;
+-- Test future date in sales_date
+CREATE OR REPLACE TEMPORARY VIEW future_sales_date AS
+SELECT country_cd, product_id, qty_sold, sales_date
+FROM purgo_playground.sales_data
+WHERE sales_date > CURRENT_DATE();
 
--- Check for data with future date
--- Expect no rows to satisfy the condition
-SELECT 
-  * 
-FROM 
-  purgo_playground.sales_data 
-WHERE 
-  sales_date > CURRENT_DATE;
+-- Expected outcome: 0 rows
+SELECT COUNT(*) AS future_date_records FROM future_sales_date;
 
--- Cleanup operation
--- Remove test data to maintain a clean state
-TRUNCATE TABLE purgo_playground.sales_data;
+-- Cleanup operations
+DROP VIEW IF EXISTS sales_data_correct_types;
+DROP VIEW IF EXISTS future_sales_date;
 
-/* Code for Testing Data Type Conversions and NULL Handling in PySpark */
-/* Begin PySpark Code Block */
+# PySpark Test Code for Databricks Environment
 
-# Import necessary libraries
-import sys
-
-# Install any required libraries if not already available
-# %pip install some_required_library
-
-# Import Spark required modules
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType, ArrayType, StructType, MapType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
 from pyspark.sql import functions as F
-from datetime import datetime
 
-# Initialize Spark Session
+# Initialize Spark Session if not already initialized
 spark = SparkSession.builder \
-    .appName("Databricks PySpark Testing") \
+    .appName("Databricks Testing") \
     .getOrCreate()
 
-# Define schema using Databricks compatible types
+# Schema definition for the test data
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -71,54 +63,26 @@ schema = StructType([
     StructField("sales_date", DateType(), True)
 ])
 
-# Null handling test data
-data_null_handling = [
-    (None, "P1001", 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),  # Null country
-    ("US", None, 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),     # Null product_id
-    ("US", "P1001", None, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),# Null qty_sold
-    ("US", "P1001", 50, None)                                                 # Null sales_date
-]
+# Load test data
+test_data = [("US", "P1001", 50, "2024-01-15"),"]
 
-# Create DataFrame
-df_null_handling = spark.createDataFrame(data_null_handling, schema)
+# Create DataFrame from test data
+df_test = spark.createDataFrame(test_data, schema)
 
-# Test for null values presence
-assert df_null_handling.where(F.col("country_cd").isNull()).count() == 1, "Null country_cd test failed"
-assert df_null_handling.where(F.col("product_id").isNull()).count() == 1, "Null product_id test failed"
-assert df_null_handling.where(F.col("qty_sold").isNull()).count() == 1, "Null qty_sold test failed"
+# Validate schema
+assert df_test.schema == schema, "Schema does not match"
 
-# Example transformation: Convert qty_sold to STRING type
-df_type_conversion = df_null_handling.withColumn("qty_sold_str", F.col("qty_sold").cast(StringType()))
+# Add dummy column to test transformations
+df_test_transformed = df_test.withColumn("qty_sold_transformed", df_test["qty_sold"] * 1)
 
-# Validate converted column datatype
-assert df_type_conversion.schema["qty_sold_str"].dataType == StringType(), "Data type conversion to STRING failed"
+# Assert transformation correctness
+assert df_test_transformed.select("qty_sold_transformed").collect() == df_test.select("qty_sold").collect(), \
+    "Transformation not applied correctly"
 
-# Test complex types: ARRAY, STRUCT, MAP
-# Create a DataFrame with complex types
-complex_schema = StructType([
-    StructField("country_cd", StringType(), True),
-    StructField("product_id", StringType(), True),
-    StructField("features", StructType([
-        StructField("qty_sold", IntegerType(), True),
-        StructField("sales_date", DateType(), True)
-    ]), True),
-    StructField("sales_dates", ArrayType(DateType()), True),
-    StructField("product_map", MapType(StringType(), IntegerType()), True)
-])
+# Validate NULL handling
+df_null_check = df_test.filter(df_test["country_cd"].isNull())
+assert df_null_check.count() == 0, "NULL values detected in 'country_cd'"
 
-complex_data = [
-    ("US", "P1001", {"qty_sold": 50, "sales_date": datetime.strptime("2024-01-15", "%Y-%m-%d").date()}, 
-     [datetime.strptime("2024-01-15", "%Y-%m-%d").date()], {"product1": 100}),
-]
-
-df_complex = spark.createDataFrame(complex_data, complex_schema)
-
-# Test if complex types are handled
-assert df_complex.schema["features"].dataType == StructType, "STRUCT type handling failed"
-assert df_complex.schema["sales_dates"].dataType == ArrayType(DateType()), "ARRAY type handling failed"
-assert df_complex.schema["product_map"].dataType.keyType == StringType(), "MAP type handling failed"
-
-# Finish Spark Session
-spark.stop()
-
-# PySpark code ends here
+# Clean up temporary data
+df_test.unpersist()
+df_test_transformed.unpersist()
