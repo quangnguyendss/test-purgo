@@ -1,63 +1,58 @@
-Feature: Unity Catalog Schema for Sample Sales Data
+Feature: Create and populate the sample_sales_data table in Unity Catalog
 
   Background:
-    Given a Unity Catalog schema named "purgo_playground" exists
-    And a table named "sample_sales_data" is created within the schema
-    And the table has the following columns:
-      | Column Name | Data Type |
-      | country_cd  | string    |
-      | product_id  | string    |
-      | qty_sold    | int       |
-      | sales_date  | date      |
+    Given the Unity Catalog schema "purgo_playground" exists
 
-  Scenario: Validate data insertion into sample_sales_data table
-    Given the sample data from "sample_sales_data.csv" is available
-    When the data is inserted into the "purgo_playground.sample_sales_data" table
-    Then the table should contain the following data:
-      | country_cd | product_id | qty_sold | sales_date  |
-      | US         | P1001      | 50       | 2024-01-15  |
-      | US         | P1002      | 30       | 2024-01-16  |
-      | CA         | P1001      | 40       | 2024-01-15  |
-      | CA         | P1003      | 25       | 2024-01-17  |
-      | UK         | P1002      | 35       | 2024-01-18  |
-      | UK         | P1004      | 20       | 2024-01-19  |
-      | IN         | P1001      | 60       | 2024-01-20  |
-      | IN         | P1003      | 45       | 2024-01-21  |
-      | AU         | P1004      | 55       | 2024-01-22  |
-      | AU         | P1002      | 38       | 2024-01-23  |
+  Scenario: Successfully create the sample_sales_data table
+    When the "sample_sales_data" table is created with columns "country_cd" (string), "product_id" (string), "qty_sold" (int), and "sales_date" (date)
+    Then the table "purgo_playground.sample_sales_data" should exist with the correct schema
 
-  Scenario Outline: Validate data type and format for each column
-    Given a row with <country_cd>, <product_id>, <qty_sold>, <sales_date>
-    When the row is inserted into the "purgo_playground.sample_sales_data" table
-    Then the data types should be validated as follows:
-      | Column Name | Expected Data Type |
-      | country_cd  | string             |
-      | product_id  | string             |
-      | qty_sold    | int                |
-      | sales_date  | date               |
-    And the sales_date should be in the format "YYYY-MM-DD"
+  Scenario Outline: Successfully insert data into the sample_sales_data table
+    Given the table "purgo_playground.sample_sales_data" exists
+    When the following data is inserted into the table:
+      | country_cd | product_id | qty_sold | sales_date |
+      | <country> | <product> | <qty>    | <date>    |
+    Then the data should exist in the table "purgo_playground.sample_sales_data"
 
     Examples:
-      | country_cd | product_id | qty_sold | sales_date  |
-      | US         | P1001      | 50       | 2024-01-15  |
-      | CA         | P1003      | 25       | 2024-01-17  |
+      | country | product | qty | date       |
+      | US      | P1001  | 50  | 2024-01-15 |
+      | US      | P1002  | 30  | 2024-01-16 |
+      | CA      | P1001  | 40  | 2024-01-15 |
+      | CA      | P1003  | 25  | 2024-01-17 |
+      | UK      | P1002  | 35  | 2024-01-18 |
+      | UK      | P1004  | 20  | 2024-01-19 |
+      | IN      | P1001  | 60  | 2024-01-20 |
+      | IN      | P1003  | 45  | 2024-01-21 |
+      | AU      | P1004  | 55  | 2024-01-22 |
+      | AU      | P1002  | 38  | 2024-01-23 |
 
-  Scenario: Handle error when inserting invalid data
-    Given a row with country_cd as "US", product_id as "P1001", qty_sold as "fifty", sales_date as "2024-01-15"
-    When the row is inserted into the "purgo_playground.sample_sales_data" table
-    Then an error should occur with the message "Invalid data type for qty_sold, expected integer"
 
-  Scenario: Ensure non-nullable constraints for country_cd and product_id
-    Given a row with country_cd as null, product_id as "P1001", qty_sold as 50, sales_date as "2024-01-15"
-    When the row is inserted into the "purgo_playground.sample_sales_data" table
-    Then an error should occur with the message "country_cd cannot be null"
+  Scenario Outline: Attempt to insert data with invalid data type
+    Given the table "purgo_playground.sample_sales_data" exists
+    When the following data is inserted into the table:
+      | country_cd | product_id | qty_sold | sales_date |
+      | <country> | <product> | <qty>    | <date>    |
+    Then the insertion should fail with error message "<error_message>"
 
-    Given a row with country_cd as "US", product_id as null, qty_sold as 50, sales_date as "2024-01-15"
-    When the row is inserted into the "purgo_playground.sample_sales_data" table
-    Then an error should occur with the message "product_id cannot be null"
+    Examples:
+      | country | product | qty    | date      | error_message                                     |
+      | US      | P1001  | "fifty" | 2024-01-15 | Invalid data type for qty_sold: expected int      |
+      | US      | P1002  | 30     | "invalid" | Invalid data type for sales_date: expected date |
 
-  Scenario: Define primary key and indexing requirements
-    Given the table "purgo_playground.sample_sales_data" is created
-    When defining the primary key
-    Then the primary key should be a combination of "country_cd" and "product_id"
-    And an index should be created on "sales_date" to optimize query performance
+  Scenario: Attempt to insert data with null values for non-nullable columns
+    Given the table "purgo_playground.sample_sales_data" exists
+    When the following data is inserted into the table:
+      | country_cd | product_id | qty_sold | sales_date |
+      | ""         | P1001      | 50       | 2024-01-15 |
+    Then the insertion should fail with error message "country_cd cannot be null"
+
+  Scenario: Attempt to insert data with duplicate primary key (if defined)
+    Given the table "purgo_playground.sample_sales_data" exists and has a primary key defined
+    And the following data already exists in the table:
+      | country_cd | product_id | qty_sold | sales_date |
+      | US         | P1001      | 50       | 2024-01-15 |
+    When the following data is inserted into the table:
+      | country_cd | product_id | qty_sold | sales_date |
+      | US         | P1001      | 60       | 2024-01-15 |
+    Then the insertion should fail with error message "Duplicate primary key violation"
