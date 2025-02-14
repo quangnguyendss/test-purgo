@@ -1,59 +1,66 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
-from pyspark.sql.functions import lit
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType, TimestampType
+from pyspark.sql import functions as F
+from datetime import datetime
 
-# Initialize a SparkSession
+# Initialize Spark Session
 spark = SparkSession.builder \
     .appName("Databricks Test Data Generation") \
     .getOrCreate()
 
-# Define the schema for the dataset
+# Define schema according to Databricks data types
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
     StructField("qty_sold", IntegerType(), True),
-    StructField("sales_date", TimestampType(), True)
+    StructField("sales_date", DateType(), True)
 ])
 
-# Generate test data for different scenarios
-
-# Happy path test data
-happy_path_data = [
-    ("US", "P1001", 50, "2024-03-21T00:00:00.000+0000"),
-    ("CA", "P1003", 25, "2024-03-22T00:00:00.000+0000")
+# Happy path test data (valid scenarios)
+data_happy_path = [
+    ("US", "P1001", 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),
+    ("CA", "P1003", 25, datetime.strptime("2024-01-17", "%Y-%m-%d").date()),
+    ("IN", "P1001", 60, datetime.strptime("2024-01-20", "%Y-%m-%d").date()),
+    ("AU", "P1004", 55, datetime.strptime("2024-01-22", "%Y-%m-%d").date())
 ]
 
-# Edge cases
-edge_cases_data = [
-    ("", "P1001", 0, "2024-03-23T00:00:00.000+0000"),   # Empty country code
-    ("XX", "P1234", 100000, "2024-03-24T00:00:00.000+0000"),  # Large quantity
+# Edge cases (boundary conditions)
+data_edge_cases = [
+    ("UK", "P1004", 999999999, datetime.strptime("2099-12-31", "%Y-%m-%d").date()),  # Max qty sold, future date
+    ("UK", "P1004", 0, datetime.strptime("2023-01-01", "%Y-%m-%d").date()),         # Min qty sold, past date
 ]
 
-# Error cases
-error_cases_data = [
-    ("ZZ", "P0000", -10, "not-a-date"),  # Invalid country, negative qty, invalid date
+# Error cases (invalid input scenarios)
+data_error_cases = [
+    ("US", "P1001", -10, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),            # Negative qty sold
+    ("US", "P1001", 50, datetime.strptime("2025-01-15", "%Y-%m-%d").date()),             # Future sales_date
 ]
 
 # NULL handling scenarios
-null_handling_data = [
-    (None, "P0001", 30, "2024-03-25T00:00:00.000+0000"),  # NULL country code
-    ("US", None, None, "2024-03-26T00:00:00.000+0000")    # NULL product_id and qty_sold
+data_null_handling = [
+    (None, "P1001", 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),  # Null country
+    ("US", None, 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),     # Null product_id
+    ("US", "P1001", None, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),# Null qty_sold
+    ("US", "P1001", 50, None)                                                 # Null sales_date
 ]
 
 # Special characters and multi-byte characters
-special_characters_data = [
-    ("JP", "P1002", 15, "2024-03-27T00:00:00.000+0000"),
-    ("CN", "产品1004", 20, "2024-03-28T00:00:00.000+0000")  # Multibyte product_id
+data_special_characters = [
+    ("JP", "Pあい", 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date()),  # Multi-byte character in product_id
+    ("$#", "P1001*", 50, datetime.strptime("2024-01-15", "%Y-%m-%d").date())  # Special characters in country and product_id
 ]
 
-# Aggregate all test data
-all_test_data = happy_path_data + edge_cases_data + error_cases_data + null_handling_data + special_characters_data
+# Combine all test data
+test_data = data_happy_path + data_edge_cases + data_error_cases + data_null_handling + data_special_characters
 
-# Create DataFrame with all test data
-test_df = spark.createDataFrame(all_test_data, schema)
+# Create DataFrame
+df_test_data = spark.createDataFrame(test_data, schema)
 
-# Show the DataFrame
-test_df.show(truncate=False)
+# Add a timestamp column to match Databricks timestamp format
+df_test_data = df_test_data.withColumn("timestamp_col", F.current_timestamp())
 
-# Stop the SparkSession
-spark.stop()
+# Display the DataFrame
+df_test_data.show(truncate=False)
+
+# Save test data to a table or location for future use if necessary
+# df_test_data.write.format("delta").mode("overwrite").saveAsTable("purgo_playground.test_data")
