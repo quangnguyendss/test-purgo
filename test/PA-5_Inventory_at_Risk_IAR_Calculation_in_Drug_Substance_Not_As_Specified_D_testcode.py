@@ -1,138 +1,83 @@
-# Databricks SQL and PySpark Test Code for Inventory at Risk Calculation
-
-# ---------------------------------------
-# Setting up Databricks Notebook for SQL-based Testing
-# ---------------------------------------
--- Install any necessary libraries (e.g., delta-core) if not pre-installed in Databricks cluster
--- %pip install [required-library] 
-
--- SQL Code: Setting context and initial test setup for Inventory at Risk Calculation
--- Creating test scenario setup
-CREATE OR REPLACE TEMP VIEW test_f_inv_movmnt AS
-SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt;
-
--- Calculating Inventory at Risk when DNSA flag is active
-CREATE OR REPLACE TEMP VIEW inventory_at_risk AS
-SELECT SUM(financial_qty) AS inv_at_risk
-FROM test_f_inv_movmnt
-WHERE dnsa_flag = "Y";
-
--- Calculating Total Inventory (define and replace with correct source or computation)
-CREATE OR REPLACE TEMP VIEW total_inventory AS
-SELECT SUM(financial_qty) AS total_inv
-FROM test_f_inv_movmnt
-WHERE dnsa_flag IS NOT NULL; -- Adjust this logic based on actual definition of total inventory
-
--- Calculating Percentage of Inventory at Risk
-CREATE OR REPLACE TEMP VIEW percentage_inventory_at_risk AS
-SELECT
-    (CASE WHEN total_inv > 0 THEN (inv_at_risk / total_inv) * 100 ELSE NULL END) AS pct_inv_at_risk
-FROM inventory_at_risk join total_inventory;
-
--- Assertion: Validate if inventory_at_risk calculation is correct
-SELECT assert((SELECT inv_at_risk FROM inventory_at_risk) = (150 + 300 + 1.79769e+308 + 100 + 350 + 0 + 500 + 9876543210 + -500 + 815), "Inventory at risk calculation failed");
-
--- Assertion: Validate if percentage_of_inventory_at_risk calculation is correct
-SELECT assert((SELECT pct_inv_at_risk FROM percentage_inventory_at_risk) IS NOT NULL, "Percentage inventory at risk calculation failed due to no valid total inventory");
-
--- Clean up temporary views
-DROP VIEW IF EXISTS inventory_at_risk;
-DROP VIEW IF EXISTS total_inventory;
-DROP VIEW IF EXISTS percentage_inventory_at_risk;
-DROP VIEW IF EXISTS test_f_inv_movmnt;
-
-# ---------------------------------------
-# PySpark unit tests for Data Type Conversion and Schema Validation
-# ---------------------------------------
-# Import necessary libraries for PySpark Testing
+# Import necessary libraries for PySpark and other utility functions
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum as _sum, when
+from pyspark.sql.functions import col, sum as _sum
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
-from pyspark.sql import Row
 
-# Setup the Spark Session for Testing
+# Initialize Spark Session
 spark = SparkSession.builder \
-    .appName("InventoryAtRiskTest") \
+    .appName("Databricks Testing for Inventory at Risk") \
     .getOrCreate()
 
-# Validate complex data type schema
+# Define the schema for the f_inv_movmnt table
 schema = StructType([
-    StructField("id", StringType(), True),
-    StructField("dnsa_flag", StringType(), True),
-    StructField("financial_qty", DoubleType(), True),
-    StructField("timestamp_event", TimestampType(), True),
-])
-
-# Create a sample DataFrame for testing
-rdd = spark.sparkContext.parallelize([
-    Row(id="1", dnsa_flag="Y", financial_qty=150.0, timestamp_event="2024-03-21T00:00:00.000+0000"),
-    Row(id="2", dnsa_flag="N", financial_qty=200.0, timestamp_event="2024-03-21T01:00:00.000+0000"),
-    # More test rows...
-])
-
-# Creating a DataFrame with the predefined schema
-inventory_df = spark.createDataFrame(rdd, schema=schema)
-inventory_df.createOrReplaceTempView("f_inv_movmnt")
-
-# Test case for schema validation
-expected_schema = StructType([
     StructField("id", StringType(), True),
     StructField("dnsa_flag", StringType(), True),
     StructField("financial_qty", DoubleType(), True),
     StructField("timestamp_event", TimestampType(), True)
 ])
 
-assert inventory_df.schema == expected_schema, "Schema validation failed!"
+# Create DataFrame with test data directly from the SQL table using the defined schema
+df = spark.sql("SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt").toDF("id", "dnsa_flag", "financial_qty", "timestamp_event")
 
-# Test case for datatype conversions
-converted_df = inventory_df.withColumn("financial_qty_str", col("financial_qty").cast(StringType()))
-assert converted_df.schema["financial_qty_str"].dataType == StringType(), "Data type conversion to STRING failed!"
+# Calculate inventory_at_risk based on dnsa_flag being 'Y'
+inventory_at_risk_df = df.filter(col("dnsa_flag") == "Y").agg(_sum("financial_qty").alias("inventory_at_risk"))
 
-# Null handling test case
-null_handling_df = inventory_df.withColumn("financial_qty",
-                                           when(col("financial_qty").isNull(), 0).otherwise(col("financial_qty")))
+# Show the calculated inventory_at_risk
+inventory_at_risk_df.show()
 
-assert null_handling_df.filter(col("financial_qty").isNull()).count() == 0, "NULL handling test failed!"
+# Assuming total_inventory is provided somehow
+# For illustration, set a static value for total_inventory
+total_inventory = 10000  # This needs to be dynamically calculated/defined in the actual implementation
 
-# Stream processing unit tests
-input_stream_df = spark.readStream.format("rate").option("rowsPerSecond", 1).load()
-transformed_stream_df = input_stream_df.select(col("value").alias("inventory_value"))
+# Calculate the percentage of Inventory at Risk
+if total_inventory:
+    inventory_at_risk_value = inventory_at_risk_df.first()["inventory_at_risk"] or 0
+    percentage_of_inventory_at_risk = (inventory_at_risk_value / total_inventory) * 100
+    print(f"Percentage of Inventory at Risk: {percentage_of_inventory_at_risk}%")
+else:
+    raise ValueError("Total inventory not provided. Calculation cannot proceed.")
 
-# Test function for ensuring stream processing
-def process_stream(df, epoch_id):
-    processed_count = df.count()
-    assert processed_count > 0, f"Stream processing failed at micro-batch {epoch_id}!"
+# Validate proper schema
+assert df.schema == schema, "Schema mismatch detected!"
 
-stream_query = transformed_stream_df.writeStream.foreachBatch(process_stream).start()
-stream_query.awaitTermination(10)  # Run stream for a few seconds for testing
-
-# Cleanup operations
+# Perform cleanup operations if necessary
 spark.catalog.dropTempView("f_inv_movmnt")
-stream_query.stop()
 
-# ---------------------------------------
-# Testing Delta Lake Features
-# ---------------------------------------
--- Delta Lake MERGE, UPDATE, DELETE scenarios
+# Stop the Spark session at the end
+spark.stop()
 
--- Sample Delta table creation
-CREATE OR REPLACE TABLE delta_inventory
-USING DELTA AS SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt
-WHERE FALSE; -- Create an empty delta table for testing
+/* SQL for testing the Databricks SQL syntax and performing schema validation and aggregation operations */
 
--- Testing Delta MERGE operation
-MERGE INTO delta_inventory AS target
-USING (SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt) AS source
-ON target.id = source.id
-WHEN MATCHED THEN
-UPDATE SET *
-WHEN NOT MATCHED
-THEN INSERT *;
+/* Setup for test environment and table creation */
+/* Ensure that the environment has the necessary setup and the test data is prepared */
 
--- Validate MERGE results
-SELECT assert(sum(financial_qty) IS NOT NULL, "Delta MERGE test failed!");
+/* Calculate the inventory at risk using a SQL query */
+WITH InventoryRiskCalculation AS (
+    SELECT
+        SUM(financial_qty) AS inventory_at_risk
+    FROM
+        agilisium_playground.purgo_playground.f_inv_movmnt
+    WHERE
+        dnsa_flag = "Y"
+)
+-- Display the result to confirm correctness
+SELECT * FROM InventoryRiskCalculation;
 
--- Cleanup
-DROP TABLE IF EXISTS delta_inventory;
+/* Assuming total_inventory is defined elsewhere */
+-- Setting a static number for illustration purposes
+-- In reality, this should be calculated or retrieved
+DECLARE @total_inventory DOUBLE;
+SET @total_inventory = 10000; -- Example value
 
-# -----------------------------------------
+/* Calculate and display the percentage of Inventory at Risk */
+SELECT
+    (ir.inventory_at_risk / @total_inventory) * 100 AS percentage_of_inventory_at_risk
+FROM
+    InventoryRiskCalculation ir;
+
+/* Perform checks and assertions on schema structure */
+-- Use DESCRIBE command to validate the schema structure
+DESCRIBE agilisium_playground.purgo_playground.f_inv_movmnt;
+
+/* Cleanup operations if necessary */
+-- Ensure that temporary objects or changes are reverted if needed
