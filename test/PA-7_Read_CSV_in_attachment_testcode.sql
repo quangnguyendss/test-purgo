@@ -1,105 +1,124 @@
--- Test SQL operations for sales data processing
+/* SQL Test Code Section */
 
--- Test case 1: Successful import to Unity Catalog
-SELECT * FROM purgo_playground.sales_data;
-
--- Test case 2: Validate DataSchema
-DESCRIBE purgo_playground.sales_data;
-
--- Unit Test SQL: Test individual transformation
-SELECT product_id, SUM(qty_sold) AS total_qty
+/* Test Delta Lake Table Schema Validation */
+SELECT *
 FROM purgo_playground.sales_data
-GROUP BY product_id
-HAVING SUM(qty_sold) IS NOT NULL;
+LIMIT 1;
 
--- Integration Test SQL: Validate entire flow
-WITH expected_totals AS (
-  SELECT 'P1001' AS product_id, 150 AS expected_qty
-  UNION ALL
-  SELECT 'P1002', 103
-  UNION ALL
-  SELECT 'P1003', 70
-  UNION ALL
-  SELECT 'P1004', 75
-)
-SELECT a.product_id, SUM(a.qty_sold) AS actual_qty, e.expected_qty
-FROM purgo_playground.sales_data a
-JOIN expected_totals e
-ON a.product_id = e.product_id
-GROUP BY a.product_id, e.expected_qty
-HAVING SUM(a.qty_sold) = e.expected_qty;
-
--- NULL Handling Test
-SELECT COUNT(*) AS null_country_count
+/* Validate Country Code Format */
+SELECT country_cd
 FROM purgo_playground.sales_data
-WHERE country_cd IS NULL;
+WHERE LENGTH(country_cd) != 2 OR NOT (country_cd GLOB '[A-Z][A-Z]')
+LIMIT 1;
 
--- Validate Delta Lake operations (MERGE/UPDATE/DELETE)
+/* Validate Non-Negative Quantity Sold */
+SELECT *
+FROM purgo_playground.sales_data
+WHERE qty_sold < 0
+LIMIT 1;
+
+/* Validate Product ID Format */
+SELECT *
+FROM purgo_playground.sales_data
+WHERE product_id NOT LIKE 'P____'
+LIMIT 1;
+
+/* Validate Sales Date Format */
+SELECT sales_date
+FROM purgo_playground.sales_data
+WHERE sales_date NOT LIKE '____-__-__'
+LIMIT 1;
+
+/* Test MERGE Operation */
 MERGE INTO purgo_playground.sales_data AS target
-USING (SELECT 'US' AS country_cd, 'P1001' AS product_id) AS source
-ON target.country_cd = source.country_cd AND target.product_id = source.product_id
+USING purgo_playground.new_sales_data AS source
+ON target.product_id = source.product_id
 WHEN MATCHED THEN
-  UPDATE SET target.qty_sold = target.qty_sold + 10
-WHEN NOT MATCHED THEN
-  INSERT (country_cd, product_id, qty_sold, sales_date) VALUES ('US', 'P1001', 10, current_date());
+  UPDATE SET qty_sold = source.qty_sold
+WHEN NOT MATCHED
+  THEN INSERT (country_cd, product_id, qty_sold, sales_date)
+  VALUES (source.country_cd, source.product_id, source.qty_sold, source.sales_date);
 
--- Window Functions Test (Analytical feature)
-SELECT country_cd, product_id, qty_sold,
-  ROW_NUMBER() OVER (PARTITION BY country_cd ORDER BY qty_sold DESC) AS rank
-FROM purgo_playground.sales_data;
+/* Test DELETE Operation */
+DELETE FROM purgo_playground.sales_data
+WHERE sales_date < '2024-01-01';
 
--- Cleanup operation
-TRUNCATE TABLE purgo_playground.sales_data;
+/* Test UPDATE Operation */
+UPDATE purgo_playground.sales_data
+SET qty_sold = qty_sold + 10
+WHERE sales_date = '2024-01-15';
 
+/* Cleanup Operation */
+DELETE FROM purgo_playground.sales_data
+WHERE product_id LIKE '%TEST%';
 
+# PySpark Test Code Section
 
-# PySpark testing with pytest
-
+# Import necessary modules
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType, DoubleType
-from pyspark.sql import functions as F
-import pytest
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
+from pyspark.sql.functions import col, when, expr
+import unittest
 
-# Initialize Spark session
-spark = SparkSession.builder.appName("TestDataSuite").getOrCreate()
+# Initialize SparkSession
+spark = SparkSession.builder \
+    .appName("Databricks Test Suite") \
+    .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+    .getOrCreate()
 
-# Define expected schema
-expected_schema = StructType([
+# Define a schema for input data
+schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
     StructField("qty_sold", IntegerType(), True),
-    StructField("sales_date", DateType(), True)
+    StructField("sales_date", TimestampType(), True)
 ])
 
-# Global test data setup
-@pytest.fixture(scope="module")
-def sales_data():
-    data = [("US", "P1001", 50, "2024-01-15"),
-            ("US", "P1002", 30, "2024-01-16"),
-            ("CA", "P1001", 40, "2024-01-15"),
-            ("CA", "P1003", 25, "2024-01-17")]
-    return spark.createDataFrame(data, expected_schema)
+# Sample data for tests
+data = [
+    ("US", "P1001", 50, "2024-01-15T00:00:00.000Z"),
+    ("IN", "P1003", 45, "2024-01-21T00:00:00.000Z"),
+    ("ZZ", "P0000", -10, "not-a-date")  # Test invalid data
+]
 
-def test_data_schema(sales_data):
-    assert sales_data.schema == expected_schema
+# Create DataFrame
+df = spark.createDataFrame(data, schema)
 
-def test_data_type_conversions(sales_data):
-    transformed_df = sales_data.withColumn("qty_double", sales_data["qty_sold"].cast("double"))
-    assert transformed_df.schema["qty_double"].dataType == DoubleType()
+class DataQualityTests(unittest.TestCase):
 
-def test_null_handling():
-    null_data = [(None, "P1002", 20, "2024-01-17"), 
-                 ("IN", "P1003", None, "2024-01-21")]
-    null_df = spark.createDataFrame(null_data, expected_schema)
-    null_count = null_df.filter(F.col("country_cd").isNull() | F.col("qty_sold").isNull()).count()
-    assert null_count == 2
+    def test_country_code_format(self):
+        """Test that all country codes are valid ISO 3166-1 alpha-2 codes."""
+        invalid_country_df = df.filter(~(col("country_cd").rlike("^[A-Z]{2}$")))
+        self.assertEqual(invalid_country_df.count(), 0)
 
-def test_data_aggregation(sales_data):
-    agg_df = sales_data.groupBy("product_id").agg(F.sum("qty_sold").alias("total_qty"))
-    result = agg_df.collect()
-    expected_result = [("P1001", 90), ("P1002", 30), ("P1003", 25)]
-    assert result == expected_result
+    def test_qty_sold_non_negative(self):
+        """Test that quantity sold is non-negative."""
+        negative_qty_df = df.filter(col("qty_sold") < 0)
+        self.assertEqual(negative_qty_df.count(), 0)
 
-# Handle cleanup (stop Spark session)
-def teardown_function():
-    spark.stop()
+    def test_sales_date_format(self):
+        """Test that all sales dates are in the expected format."""
+        invalid_date_df = df.filter(~(df.sales_date.cast("date").isNotNull()))
+        self.assertEqual(invalid_date_df.count(), 1)  # Known invalid case
+
+    def test_null_handling(self):
+        """Test Null handling mechanism in DataFrame."""
+        null_filtered_df = df.filter(
+            col("country_cd").isNull() |
+            col("product_id").isNull() |
+            col("qty_sold").isNull() |
+            col("sales_date").isNull()
+        )
+        self.assertEqual(null_filtered_df.count(), 0)
+
+    def test_product_id_format(self):
+        """Test the product id format adheres to 'P1000' pattern."""
+        invalid_product_id_df = df.filter(~col("product_id").rlike("^P\\d{4}$"))
+        self.assertEqual(invalid_product_id_df.count(), 0)
+
+if __name__ == "__main__":
+    # Run tests
+    unittest.main(argv=[''], exit=False)
+
+# Stop the SparkSession
+spark.stop()
