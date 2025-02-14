@@ -1,115 +1,139 @@
-# Databricks PySpark test setup and execution
+# PySpark Test Code using unittest framework
 
-# Install necessary libraries
-# %pip install <specific-libraries-if-any>
-
-# Import required modules
+# Required Libraries for PySpark Testing
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum as spark_sum
-from pyspark.sql.types import StructType, StructField, LongType, StringType, DoubleType, TimestampType
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 import unittest
 
-# Spark session setup
+# Initiate Spark Session
 spark = SparkSession.builder \
-    .appName("Test Inventory at Risk Calculations") \
+    .appName("Inventory at Risk Test Suite") \
     .getOrCreate()
 
-# Define schema for test validation
-schema = StructType([
-    StructField("id", LongType(), True),
-    StructField("dnsa_flag", StringType(), True),
-    StructField("financial_qty", DoubleType(), True),
-    StructField("timestamp_event", TimestampType(), True)
-])
+# Test Suite for Databricks Environment
+class InventoryAtRiskTest(unittest.TestCase):
+  
+    @classmethod
+    def setUpClass(cls):
+        """
+        Set up method to create initial configurations, common initialization functions, 
+        and instantiate any needed resources before all tests.
+        """
+        # Define schema for test data
+        cls.schema = StructType([
+            StructField("id", StringType(), True),
+            StructField("dnsa_flag", StringType(), True),
+            StructField("financial_qty", DoubleType(), True),
+            StructField("timestamp_event", TimestampType(), True)
+        ])
+    
+    def setUp(self):
+        """
+        Set up any state specific to the test method. This method is called before the invocation of each test method.
+        """
+        # Sample data for testing
+        self.data = [
+            ('1', 'Y', 100.0, '2024-03-21T01:00:00.000'),
+            ('2', 'N', 200.0, '2024-03-21T02:00:00.000'),
+            ('3', 'Y', 300.0, '2024-03-21T03:00:00.000'),
+            ('4', 'N', None, '2024-03-21T04:00:00.000'),
+            ('5', None, 400.0, '2024-03-21T05:00:00.000'),
+        ]
 
-# Test Data Creation
-test_data = [
-    (1, "Y", 150.0, "2024-03-21T00:00:00.000+0000"),
-    (2, "N", 200.0, "2024-03-21T01:00:00.000+0000"),
-    (3, "Y", 300.0, "2024-03-21T02:00:00.000+0000"),
-    # ... (continue from test data SQL)
-]
-
-# Create DataFrame from test data
-df = spark.createDataFrame(test_data, schema=schema)
-
-# Define unit test class
-class TestInventoryAtRiskCalculations(unittest.TestCase):
-
-    # Test inventory at risk calculations
-    def test_inventory_at_risk_calculation(self):
-        # Filter and calculate inventory at risk
-        inventory_at_risk = df.filter(col("dnsa_flag") == "Y") \
-            .agg(spark_sum("financial_qty").alias("inventory_at_risk")) \
-            .first()["inventory_at_risk"]
+        # Initialize DataFrame
+        self.df = spark.createDataFrame(self.data, schema=self.schema)
+      
+    def test_sum_inventory_at_risk(self):
+        """
+        Calculate the sum of the financial_qty where the dnsa_flag is 'Y' to represent inventory at risk.
+        """
+        # Perform sum operation
+        inventory_at_risk = self.df \
+            .filter(self.df.dnsa_flag == "Y") \
+            .agg(F.sum("financial_qty").alias("inventory_at_risk")) \
+            .collect()[0]["inventory_at_risk"]
         
-        # Assert the sum of Y financial_qty is correct
-        expected_sum = 450.0  # 150 + 300
-        self.assertEqual(inventory_at_risk, expected_sum, "Inventory at risk calculation is incorrect.")
+        # Assertion
+        self.assertEqual(inventory_at_risk, 400.0)
 
-    # Test percentage of inventory at risk calculation
-    def test_percentage_of_inventory_at_risk(self):
-        # Assume total_inventory is provided
-        total_inventory = 1000.0
+    def test_percentage_inventory_at_risk(self):
+        """
+        Test the calculation of percentage of inventory at risk.
+        """
+        # Define total inventory for testing purpose
+        total_inventory = 1000
 
         # Calculate inventory at risk
-        inventory_at_risk = df.filter(col("dnsa_flag") == "Y") \
-            .agg(spark_sum("financial_qty").alias("inventory_at_risk")) \
-            .first()["inventory_at_risk"]
+        inventory_at_risk = self.df \
+            .filter(self.df.dnsa_flag == "Y") \
+            .agg(F.sum("financial_qty").alias("inventory_at_risk")) \
+            .collect()[0]["inventory_at_risk"]
 
-        # Calculate percentage of inventory at risk
-        percentage_of_inventory_at_risk = (inventory_at_risk / total_inventory) * 100
+        # Calculate percentage
+        percentage_at_risk = (inventory_at_risk / total_inventory) * 100
+
+        # Assertion
+        self.assertAlmostEqual(percentage_at_risk, 40.0, delta=0.01)
+
+    def test_null_financial_qty_handling(self):
+        """
+        Ensure the NULL values in financial_qty do not affect calculations.
+        """
+        # Calculate with and without filtering NULLs
+        risky_qty_with_nulls = self.df \
+            .filter(self.df.dnsa_flag == "Y") \
+            .agg(F.sum("financial_qty").alias("inventory_at_risk")) \
+            .collect()[0]["inventory_at_risk"]
         
-        # Assert the calculated percentage is correct
-        expected_percentage = 45.0  # (450 / 1000) * 100
-        self.assertAlmostEqual(percentage_of_inventory_at_risk, expected_percentage, "Percentage of inventory at risk calculation is incorrect.")
+        risky_qty_without_nulls = self.df \
+            .filter((self.df.dnsa_flag == "Y") & (~self.df.financial_qty.isNull())) \
+            .agg(F.sum("financial_qty").alias("inventory_at_risk")) \
+            .collect()[0]["inventory_at_risk"]
 
-    # Schema validation test
-    def test_schema_validation(self):
-        expected_schema = schema
-        self.assertTrue(df.schema == expected_schema, "Schema validation failed.")
+        # Assertions
+        self.assertIsNone(risky_qty_with_nulls)
+        self.assertEqual(risky_qty_without_nulls, 400.0)
 
-# Run unit tests
-if __name__ == '__main__':
-    unittest.main(argv=['ignored', '-v'], exit=False, verbosity=2)
+    def tearDown(self):
+        """
+        Clean up any state or resources initialized in the setUp. This is executed after each test method.
+        """
+        # Stop Spark session
+        spark.stop()
 
--- Databricks SQL testing and validation
+if __name__ == "__main__":
+    unittest.main(argv=['first-arg-is-ignored'], exit=False)
 
--- Calculate Inventory at Risk
-WITH RiskyInventory AS (
-    SELECT financial_qty
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-    WHERE dnsa_flag = "Y"
-)
+-- SQL Test Queries for Databricks SQL Environment
 
--- Summarize inventory at risk
+/* Test Case: Calculate Inventory at Risk when DNSA flag is active */
 SELECT SUM(financial_qty) AS inventory_at_risk
-FROM RiskyInventory;
+FROM agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE dnsa_flag = "Y";
 
--- Calculate Total Inventory
--- Assuming there's a total inventory value available for calculations
-WITH TotalInventory AS (
-    SELECT SUM(financial_qty) AS total_inventory
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
+/* Test Case: Calculate Percentage of Inventory at Risk */
+WITH inventory_data AS (
+  SELECT 
+    SUM(financial_qty) AS inventory_at_risk
+  FROM agilisium_playground.purgo_playground.f_inv_movmnt
+  WHERE dnsa_flag = "Y"
+), total_inventory_data AS (
+  SELECT 
+    SUM(financial_qty) AS total_inventory
+  FROM agilisium_playground.purgo_playground.f_inv_movmnt
 )
-
--- Calculate Percentage of Inventory at Risk
 SELECT 
-    (SUM(RiskyInventory.financial_qty) / TotalInventory.total_inventory) * 100 AS percentage_of_inventory_at_risk
-FROM RiskyInventory, TotalInventory;
+  (inventory_at_risk / total_inventory) * 100 AS percentage_of_inventory_at_risk
+FROM 
+  inventory_data, total_inventory_data;
 
--- Validate Delta Lake operations
--- Example: INSERT INTO delta lake
-MERGE INTO agilisium_playground.purgo_playground.f_inv_movmnt AS target
-USING (
-    SELECT 29 AS id, "N" AS dnsa_flag, 123.0 AS financial_qty, CURRENT_TIMESTAMP AS timestamp_event
-) AS source
-ON target.id = source.id
-WHEN MATCHED THEN
-    UPDATE SET target.financial_qty = source.financial_qty
-WHEN NOT MATCHED
-    THEN INSERT (id, dnsa_flag, financial_qty, timestamp_event) VALUES (source.id, source.dnsa_flag, source.financial_qty, source.timestamp_event);
+/* Error handling: Check for undefined total inventory scenario */
+SELECT COUNT(*) AS inventory_defined 
+FROM agilisium_playground.purgo_playground.f_inv_movmnt;
 
--- Cleanup operations
--- Example: Delete test data if needed
-DELETE FROM agilisium_playground.purgo_playground.f_inv_movmnt WHERE id >= 29;
+/* Validate proper handling of NULL values */
+SELECT 
+  SUM(CASE WHEN dnsa_flag = "Y" THEN financial_qty ELSE 0 END) AS inventory_with_nulls,
+  SUM(CASE WHEN dnsa_flag = "Y" AND financial_qty IS NOT NULL THEN financial_qty ELSE 0 END) AS inventory_without_nulls
+FROM agilisium_playground.purgo_playground.f_inv_movmnt;
