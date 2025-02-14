@@ -1,0 +1,52 @@
+Feature: Data Integration and Validation for Purgo Playground
+
+  Background:
+    Given the Unity Catalog Schema is "purgo_playground"
+    And the table "sample_sales_data" exists with columns "country_cd", "product_id", "qty_sold", "sales_date"
+    And the table "sample_users_data" exists with columns "country_cd", "product_id", "qty_sold", "sales_date", "valid"
+
+  Scenario: Validate and Integrate Data from Sample Users Data
+    Given the "valid" column in "sample_users_data" is used to filter records
+    When the "valid" column value is 1
+    Then the record should be considered for integration
+
+  Scenario Outline: Successful Data Integration
+    Given a record in "sample_users_data" with country_cd "<country_cd>", product_id "<product_id>", qty_sold "<qty_sold>", sales_date "<sales_date>", valid "<valid>"
+    When the "valid" column value is 1
+    Then the record should be integrated with "sample_sales_data"
+    And the integrated data should match the format:
+      | country_cd | product_id | qty_sold | sales_date  |
+    Examples:
+      | country_cd | product_id | qty_sold | sales_date  | valid |
+      | US         | P1001      | 50       | 2024-01-15  | 1     |
+      | US         | P1002      | 30       | 2024-01-16  | 1     |
+      | CA         | P1001      | 40       | 2024-01-15  | 1     |
+      | CA         | P1003      | 25       | 2024-01-17  | 1     |
+
+  Scenario: Error Handling for Invalid Records
+    Given a record in "sample_users_data" with valid column value 0
+    When the record is processed
+    Then an error message "Record is invalid and cannot be integrated" should be logged
+
+  Scenario: Data Transformation and Calculation
+    Given a record in "sample_users_data" with qty_sold "<qty_sold>"
+    When the data is integrated
+    Then the qty_sold should be summed for each product_id and country_cd
+    And the result should be stored in "sample_sales_data"
+
+  Scenario Outline: Error Scenario for Missing Data
+    Given a record in "sample_users_data" with missing "<column>"
+    When the record is processed
+    Then an error message "Missing data in <column>" should be logged
+    Examples:
+      | column      |
+      | country_cd  |
+      | product_id  |
+      | qty_sold    |
+      | sales_date  |
+
+  Scenario: Constraints and Limitations
+    Given the data processing constraints
+    When the data is processed
+    Then the storage should not exceed the allocated space
+    And processing time should be within acceptable limits
