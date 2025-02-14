@@ -1,74 +1,84 @@
--- Use proper SQL syntax block for calculation in Databricks
+-- Unity Catalog Test Data Setup
+-- Create or replace table for testing
+CREATE OR REPLACE TABLE agilisium_playground.purgo_playground.f_inv_movmnt (
+    id BIGINT,
+    dnsa_flag STRING,
+    financial_qty DOUBLE,
+    timestamp_event TIMESTAMP
+);
 
--- Calculate the inventory_at_risk, defined as the sum of financial_qty where dnsa_flag is 'Y'
-CREATE OR REPLACE TEMP VIEW inventory_at_risk_view AS
-SELECT SUM(financial_qty) AS inventory_at_risk
-FROM agilisium_playground.purgo_playground.f_inv_movmnt
-WHERE dnsa_flag = 'Y';
+-- Insert diverse test records
+-- Happy Path Test Data
+INSERT INTO agilisium_playground.purgo_playground.f_inv_movmnt VALUES
+(1, "Y", 150.0, TIMESTAMP('2024-03-21T00:00:00')),
+(2, "N", 200.0, TIMESTAMP('2024-03-21T01:00:00')),
+(3, "Y", 300.0, TIMESTAMP('2024-03-21T02:00:00'));
 
--- Assume total_inventory is retrieved from a reliable source
--- Here, we'll set it as a constant for demonstration purposes
-SET total_inventory = 10000.0;
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, LongType
+from pyspark.sql.functions import col, sum as _sum
+from delta.tables import DeltaTable
 
--- Validate if total_inventory is properly set
-IF (${total_inventory} IS NULL OR ${total_inventory} <= 0) THEN
-    THROW "Error: Total inventory value should be greater than zero for percentage calculation.";
-END IF;
+# Define schema for validation
+schema = StructType([
+    StructField("id", LongType(), True),
+    StructField("dnsa_flag", StringType(), True),
+    StructField("financial_qty", DoubleType(), True),
+    StructField("timestamp_event", TimestampType(), True)
+])
 
--- Calculate the percentage of inventory at risk
-CREATE OR REPLACE TEMP VIEW percentage_inventory_at_risk_view AS
-SELECT 
-    inventory_at_risk,
-    (inventory_at_risk / ${total_inventory}) * 100 AS percentage_of_inventory_at_risk
-FROM inventory_at_risk_view;
+# Read the test data into a DataFrame
+df = spark.read.table("agilisium_playground.purgo_playground.f_inv_movmnt")
 
--- Display results
-SELECT * FROM percentage_inventory_at_risk_view;
+# Schema validation test
+assert df.schema == schema, "Schema does not match expected schema"
 
--- Implement Delta Lake features for data integrity and performance
-
--- Optimizing the table using Z-Ordering on the column expected to maximize performance
-OPTIMIZE agilisium_playground.purgo_playground.f_inv_movmnt ZORDER BY (dnsa_flag);
-
--- Example of handling data versioning and life cycle management using VACUUM
-VACUUM agilisium_playground.purgo_playground.f_inv_movmnt RETAIN 168 HOURS; -- Retain data for 7 days
-
-from pyspark.sql import functions as F
-
-# Load the data from the Unity Catalog using PySpark
-df = spark.table("agilisium_playground.purgo_playground.f_inv_movmnt")
-
-# Calculate the inventory_at_risk using PySpark DataFrame transformations
-inventory_at_risk_df = (
-    df.filter(df.dnsa_flag == 'Y')
-    .agg(F.sum("financial_qty").alias("inventory_at_risk"))
-)
-
-# Collect the result to calculate percentages
+# Calculate inventory at risk when DNSA flag is active
+inventory_at_risk_df = df.filter(df.dnsa_flag == "Y").agg(_sum("financial_qty").alias("inventory_at_risk"))
 inventory_at_risk = inventory_at_risk_df.collect()[0]["inventory_at_risk"]
 
-# Assuming total_inventory is fetched from a reliable source
-total_inventory = 10000.0  # Placeholder value for demonstration
+# Total Inventory Calculation
+total_inventory = df.agg(_sum("financial_qty").alias("total_inventory")).collect()[0]["total_inventory"]
 
-# Validate total inventory value
-if total_inventory <= 0:
-    raise ValueError("Total inventory value should be greater than zero for percentage calculation.")
+# Percentage of Inventory at Risk Calculation
+try:
+    percentage_of_inventory_at_risk = (inventory_at_risk / total_inventory) * 100
+except ZeroDivisionError:
+    percentage_of_inventory_at_risk = None
+    print("Error: Cannot calculate percentage_of_inventory_at_risk with undefined total inventory")
 
-# Calculate percentage of inventory at risk
-percentage_of_inventory_at_risk = (inventory_at_risk / total_inventory) * 100
+assert percentage_of_inventory_at_risk is not None, "Error: Cannot calculate percentage_of_inventory_at_risk."
 
-# Display calculated results
+# Print results
 print(f"Inventory at Risk: {inventory_at_risk}")
-print(f"Percentage of Inventory at Risk: {percentage_of_inventory_at_risk}%")
+print(f"Percentage of Inventory at Risk: {percentage_of_inventory_at_risk}")
 
-# Example of performing a Delta Lake operation - MERGE
-spark.sql("""
-    MERGE INTO agilisium_playground.purgo_playground.f_inv_movmnt AS target
-    USING (
-      SELECT * FROM VALUES
-      (28, 'Y', -1e308, TIMESTAMP('2024-03-22T01:00:00.000+0000'))
-    ) AS source (id, dnsa_flag, financial_qty, timestamp_event)
-    ON target.id = source.id
-    WHEN MATCHED THEN UPDATE SET *
-    WHEN NOT MATCHED THEN INSERT *
-""")
+# Delta Lake operations
+# Define Delta Lake write path
+delta_path = "/delta/path/to/f_inv_movmnt"
+df.write.format("delta").mode("overwrite").save(delta_path)
+
+# Read back from Delta Lake to validate
+delta_df = spark.read.format("delta").load(delta_path)
+assert delta_df.count() == df.count(), "Delta Lake write/read operation failed"
+
+# Perform Merge Operation
+delta_table = DeltaTable.forPath(spark, delta_path)
+delta_table.alias("tgt").merge(
+    df.alias("src"),
+    "tgt.id = src.id"
+).whenMatchedUpdate(set={"financial_qty": "src.financial_qty"}).execute()
+
+assert delta_table.toDF().filter(col("id") == 1).select("financial_qty").collect()[0][0] == 150.0, "Delta Merge failed"
+
+# Cleanup test resources
+spark.sql("DROP TABLE IF EXISTS agilisium_playground.purgo_playground.f_inv_movmnt")
+
+-- SQL Queries to validate the results
+-- Calculate Inventory at Risk
+SELECT SUM(financial_qty) AS inventory_at_risk
+FROM agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE dnsa_flag = "Y";
+
+-- Calculate Total Inventory
+SELECT SUM(financial_qty) AS total_inventory
+FROM agilisium_playground.purgo_playground.f_inv_movmnt;
