@@ -1,42 +1,63 @@
-Feature: Create and populate the sample_sales_data table in Unity Catalog
+Feature: Unity Catalog Schema for Sample Sales Data
 
   Background:
-    Given A Unity Catalog schema named "purgo_playground" exists
-
-  Scenario: Successfully create and populate the sample_sales_data table
-    When The table "sample_sales_data" is created in the "purgo_playground" schema with columns "country_cd" (string), "product_id" (string), "qty_sold" (int), and "sales_date" (date)
-    And The following data is loaded into the "purgo_playground.sample_sales_data" table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | US         | P1001      | 50       | 2024-01-15 |
-      | US         | P1002      | 30       | 2024-01-16 |
-      | CA         | P1001      | 40       | 2024-01-15 |
-      | CA         | P1003      | 25       | 2024-01-17 |
-      | UK         | P1002      | 35       | 2024-01-18 |
-      | UK         | P1004      | 20       | 2024-01-19 |
-      | IN         | P1001      | 60       | 2024-01-20 |
-      | IN         | P1003      | 45       | 2024-01-21 |
-      | AU         | P1004      | 55       | 2024-01-22 |
-      | AU         | P1002      | 38       | 2024-01-23 |
-    Then The "purgo_playground.sample_sales_data" table should exist
-    And The "purgo_playground.sample_sales_data" table should have 10 rows
-
-  Scenario Outline: Validate data types in sample_sales_data table
-    When The table "sample_sales_data" exists in the "purgo_playground" schema
-    Then The column "<column_name>" in the "purgo_playground.sample_sales_data" table should have data type "<data_type>"
-
-    Examples:
-      | column_name | data_type |
+    Given a Unity Catalog schema named "purgo_playground" exists
+    And a table named "sample_sales_data" is created within the schema
+    And the table has the following columns:
+      | Column Name | Data Type |
       | country_cd  | string    |
       | product_id  | string    |
       | qty_sold    | int       |
       | sales_date  | date      |
 
+  Scenario: Validate data insertion into sample_sales_data table
+    Given the sample data from "sample_sales_data.csv" is available
+    When the data is inserted into the "purgo_playground.sample_sales_data" table
+    Then the table should contain the following data:
+      | country_cd | product_id | qty_sold | sales_date  |
+      | US         | P1001      | 50       | 2024-01-15  |
+      | US         | P1002      | 30       | 2024-01-16  |
+      | CA         | P1001      | 40       | 2024-01-15  |
+      | CA         | P1003      | 25       | 2024-01-17  |
+      | UK         | P1002      | 35       | 2024-01-18  |
+      | UK         | P1004      | 20       | 2024-01-19  |
+      | IN         | P1001      | 60       | 2024-01-20  |
+      | IN         | P1003      | 45       | 2024-01-21  |
+      | AU         | P1004      | 55       | 2024-01-22  |
+      | AU         | P1002      | 38       | 2024-01-23  |
 
-  Scenario: Attempt to create the table with an invalid schema
-    When The table "sample_sales_data" is created in the "purgo_playground" schema with an invalid schema
-    Then The table creation should fail with an error message
+  Scenario Outline: Validate data type and format for each column
+    Given a row with <country_cd>, <product_id>, <qty_sold>, <sales_date>
+    When the row is inserted into the "purgo_playground.sample_sales_data" table
+    Then the data types should be validated as follows:
+      | Column Name | Expected Data Type |
+      | country_cd  | string             |
+      | product_id  | string             |
+      | qty_sold    | int                |
+      | sales_date  | date               |
+    And the sales_date should be in the format "YYYY-MM-DD"
 
-  Scenario: Attempt to load data with incorrect data types
-    When The table "sample_sales_data" exists in the "purgo_playground" schema
-    And Attempting to load data with incorrect data types into "purgo_playground.sample_sales_data"
-    Then The data load should fail with an error message
+    Examples:
+      | country_cd | product_id | qty_sold | sales_date  |
+      | US         | P1001      | 50       | 2024-01-15  |
+      | CA         | P1003      | 25       | 2024-01-17  |
+
+  Scenario: Handle error when inserting invalid data
+    Given a row with country_cd as "US", product_id as "P1001", qty_sold as "fifty", sales_date as "2024-01-15"
+    When the row is inserted into the "purgo_playground.sample_sales_data" table
+    Then an error should occur with the message "Invalid data type for qty_sold, expected integer"
+
+  Scenario: Ensure non-nullable constraints for country_cd and product_id
+    Given a row with country_cd as null, product_id as "P1001", qty_sold as 50, sales_date as "2024-01-15"
+    When the row is inserted into the "purgo_playground.sample_sales_data" table
+    Then an error should occur with the message "country_cd cannot be null"
+
+    Given a row with country_cd as "US", product_id as null, qty_sold as 50, sales_date as "2024-01-15"
+    When the row is inserted into the "purgo_playground.sample_sales_data" table
+    Then an error should occur with the message "product_id cannot be null"
+
+  Scenario: Define primary key and indexing requirements
+    Given the table "purgo_playground.sample_sales_data" is created
+    When defining the primary key
+    Then the primary key should be a combination of "country_cd" and "product_id"
+    And an index should be created on "sales_date" to optimize query performance
