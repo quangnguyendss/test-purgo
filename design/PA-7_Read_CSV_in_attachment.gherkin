@@ -1,54 +1,68 @@
-Feature: Data Validation and Processing for Sample Sales Data
+Feature: Sales Data Processing in Unity Catalog
 
-  Background:
-    Given a CSV file "sample_sales_data.csv" with columns "country_cd", "product_id", "qty_sold", "sales_date"
-    And the schema used is "purgo_playground"
+  Background: Initial Setup
+    Given a Unity Catalog schema named "purgo_playground"
+    And a dataset is available in a CSV format
 
-  Scenario: Validate and Process Happy Path Data
-    Given the CSV file is successfully uploaded to the system
-    When the data is processed
-    Then the data should be stored in "purgo_playground.sales_data" table
-    And each entry should have a valid "country_cd", "product_id", "qty_sold", and "sales_date"
-    And "qty_sold" should be a positive integer
-    And "sales_date" should be in "YYYY-MM-DD" format
-    
-  Scenario: Handle Invalid Quantity Data
-    Given a CSV file contains "qty_sold" data that is not a positive integer
-    When the data is processed
-    Then an error message "Invalid quantity for product_id at sales_date. Quantity must be a positive integer." should be logged
+  Scenario Outline: Validate Sales Data Entry
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a record is processed with country code "<country_cd>", product ID "<product_id>", quantity sold "<qty_sold>", and sales date "<sales_date>"
+    Then the record should be successfully validated if it meets the criteria
 
-  Scenario: Handle Invalid Date Format
-    Given a CSV file contains "sales_date" data not in "YYYY-MM-DD" format
-    When the data is processed
-    Then an error message "Invalid date format for product_id at sales_date. Date must be in YYYY-MM-DD format." should be logged
-
-  Scenario Outline: Process and Validate Different Country Codes
-    Given a "sample_sales_data.csv" file is provided
-    When the data is processed
-    Then entries with country code "<country_cd>" should be validated against the list of allowed country codes
     Examples:
-      | country_cd |
-      | US         |
-      | CA         |
-      | UK         |
-      | IN         |
-      | AU         |
+      | country_cd | product_id | qty_sold | sales_date |
+      | US         | P1001      | 50       | 2024-01-15 |
+      | US         | P1002      | 30       | 2024-01-16 |
+      | CA         | P1001      | 40       | 2024-01-15 |
+      | CA         | P1003      | 25       | 2024-01-17 |
+      | UK         | P1002      | 35       | 2024-01-18 |
+      | UK         | P1004      | 20       | 2024-01-19 |
+      | IN         | P1001      | 60       | 2024-01-20 |
+      | IN         | P1003      | 45       | 2024-01-21 |
+      | AU         | P1004      | 55       | 2024-01-22 |
+      | AU         | P1002      | 38       | 2024-01-23 |
 
-  Scenario: Handle Data Integration with External Systems
-    Given the data is stored in "purgo_playground.sales_data" table
-    When the system integrates with external CRM for sales analysis
-    Then the integration should use API endpoint "https://api.externalcrm.com/salesdata"
-    And the data should be transmitted securely using TLS encryption
-    And only fields "country_cd", "product_id", "qty_sold", "sales_date" are shared
+  Scenario: Validate Country Code Format
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a record is processed
+    Then the field "country_cd" must be a valid ISO 3166-1 alpha-2 country code
 
-  Scenario: Ensure Data Security and Compliance
-    Given the schema "purgo_playground" has access control lists configured
-    When data is accessed
-    Then only users with "data_viewer" roles are permitted to access the data
-    And all data access is logged with a timestamp and user ID
+  Scenario: Validate Non-Negative Quantity Sold
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a record is processed
+    Then the field "qty_sold" must be a non-negative integer
 
-  Scenario: Validate Against Security and Compliance Standards
-    Given data is stored and processed in "purgo_playground"
-    When validation occurs
-    Then the system should comply with GDPR requirements for data handling
-    And log a message "Data processing and storage complies with GDPR" on successful validation
+  Scenario: Validate Product ID Format
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a record is processed
+    Then the field "product_id" must match the pattern "P\d{4}"
+
+  Scenario: Validate Sales Date Format
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a record is processed
+    Then the field "sales_date" must be in "YYYY-MM-DD" format
+
+  Scenario: Handle Missing Data Entries
+    Given the dataset has been checked for completeness
+    When a record is missing any data entries
+    Then an error message "Missing data in one or more fields" should be generated
+
+  Scenario: Duplicate Entry Error
+    Given the dataset is loaded into the "purgo_playground" schema
+    When a duplicate entry is processed
+    Then an error message "Duplicate entry detected" should be generated
+
+  Scenario Outline: Successful Data Processing
+    Given the record is valid
+    When processed in the schema "purgo_playground"
+    Then the record is stored successfully
+
+    Examples:
+      | country_cd | product_id | qty_sold | sales_date |
+      | US         | P1001      | 50       | 2024-01-15 |
+      | IN         | P1003      | 45       | 2024-01-21 |
+  
+  Scenario: Invalid Sales Date
+    Given the dataset is loaded into the "purgo_playground" schema
+    When the "sales_date" is not in a valid format
+    Then an error message "Invalid sales date format" should be generated
