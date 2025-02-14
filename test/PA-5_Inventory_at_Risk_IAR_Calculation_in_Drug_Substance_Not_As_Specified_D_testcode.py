@@ -1,98 +1,72 @@
-# Databricks Setup and Required Libraries
-# Ensure necessary imports and installations
+# Databricks Test Code for Inventory at Risk Calculation
 
-# Install required packages for PySpark testing
-# MAGIC %pip install pytest
-
-from pyspark.sql import SparkSession, Row
-from pyspark.sql.functions import col
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+# Import libraries for PySpark testing
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import sum as spark_sum, col
 import pytest
 
-# Create Spark session for PySpark unit tests
+# Create a Spark session for testing, if not already created
 spark = SparkSession.builder \
-    .appName("Databricks Test Suite") \
+    .appName("Databricks Inventory Test") \
     .getOrCreate()
 
-# Schema setup for SQL test table
-schema_f_inv_movmnt = StructType([
-    StructField("id", LongType(), True),
-    StructField("dnsa_flag", StringType(), True),
-    StructField("financial_qty", DoubleType(), True),
-    StructField("timestamp_event", TimestampType(), True)
-])
+# Sample Data Setup in Databricks SQL for testing
+spark.sql("""
+CREATE OR REPLACE TABLE agilisium_playground.purgo_playground.f_inv_movmnt (
+    id BIGINT,
+    dnsa_flag STRING,
+    financial_qty DOUBLE,
+    timestamp_event TIMESTAMP
+);
+""")
 
-# Define creating test data for SQL table
-test_data = [
-    Row(id=1, dnsa_flag="Y", financial_qty=150.0, timestamp_event="2024-03-21T00:00:00.000+0000"),
-    # Add more test data as needed following the test data specified
-]
+spark.sql("""
+INSERT INTO agilisium_playground.purgo_playground.f_inv_movmnt VALUES
+(1, 'Y', 150.0, TIMESTAMP('2024-03-21T00:00:00.000+0000')),
+(2, 'N', 200.0, TIMESTAMP('2024-03-21T01:00:00.000+0000')),
+(3, 'Y', 300.0, TIMESTAMP('2024-03-21T02:00:00.000+0000'));
+""")
 
-# Create DataFrame for testing
-df_f_inv_movmnt = spark.createDataFrame(test_data, schema=schema_f_inv_movmnt)
+# PySpark Function to Calculate Inventory at Risk
+def calculate_inventory_at_risk():
+    # SQL to sum financial quantities where dnsa_flag is "Y"
+    inventory_at_risk_result = spark.sql("""
+        SELECT SUM(financial_qty) AS inventory_at_risk
+        FROM agilisium_playground.purgo_playground.f_inv_movmnt
+        WHERE dnsa_flag = 'Y'
+    """)
+    return inventory_at_risk_result.collect()[0][0]
 
-# Temporary view for SQL queries
-df_f_inv_movmnt.createOrReplaceTempView("f_inv_movmnt")
+# Unit Tests for Inventory at Risk Calculation
+def test_calculate_inventory_at_risk():
+    result = calculate_inventory_at_risk()
+    # Verify the calculated sum
+    assert result == 450.0, f"Expected 450.0 but got {result}"
 
-# Example unit test function using Pytest
-def test_inventory_at_risk_calculation():
-    # SQL to calculate inventory at risk when dns_flag is "Y"
-    result = spark.sql("""
-        SELECT SUM(financial_qty) AS inventory_at_risk 
-        FROM f_inv_movmnt 
-        WHERE dnsa_flag = "Y"
-    """).collect()[0].inventory_at_risk
+# PySpark Function to Calculate Percentage of Inventory at Risk
+def calculate_percentage_of_inventory_at_risk(inventory_at_risk, total_inventory):
+    if total_inventory == 0:
+        raise ValueError("Total inventory cannot be zero")
+    percentage = (inventory_at_risk / total_inventory) * 100
+    return percentage
 
-    # Expected result based on the test data
-    expected_inventory_at_risk = 450.0 # Replace with appropriate value from test data
-    
-    # Assertion to check if the calculated value matches expected
-    assert result == expected_inventory_at_risk, f"Expected {expected_inventory_at_risk} but got {result}"
+# Unit Test for Percentage Calculation
+def test_calculate_percentage_of_inventory_at_risk():
+    inventory_at_risk = 450.0
+    total_inventory = 1000.0
+    percentage = calculate_percentage_of_inventory_at_risk(inventory_at_risk, total_inventory)
+    assert percentage == 45.0, f"Expected 45.0 but got {percentage}"
 
-# Streaming test function (example)    
-@pytest.mark.parametrize("batch_data,expected_risk", [
-    ([(2, "Y", 250.0)], 1070.0),  # Example where additional data pushes risk
-    ([], 820.0),                   # No additional data
-])
-def test_streaming_inventory_at_risk(batch_data, expected_risk):
-    # Create streaming DataFrame
-    schema = schema_f_inv_movmnt
-    stream_df = spark.createDataFrame(batch_data, schema)
-    
-    # Perform streaming test logic here
-    result = stream_df.filter(col("dnsa_flag") == "Y").groupBy().sum("financial_qty").collect()[0][0]
-    
-    # Assert the result matches expected risk
-    assert result == expected_risk, "Streaming inventory at risk mismatch"
+    # Handling division by zero
+    with pytest.raises(ValueError):
+        calculate_percentage_of_inventory_at_risk(inventory_at_risk, 0)
 
-# SQL for cleanup (DROP TABLE) after tests
-cleanup_sql = """
-DROP TABLE IF EXISTS agilisium_playground.purgo_playground.f_inv_movmnt
-"""
-spark.sql(cleanup_sql)
+# Cleanup Table after Tests
+def test_cleanup_database():
+    spark.sql("DROP TABLE IF EXISTS agilisium_playground.purgo_playground.f_inv_movmnt")
 
-# Additional PySpark test function examples
-def test_data_schema_validation():
-    # Validate schema of f_inv_movmnt
-    expected_schema = schema_f_inv_movmnt
-    
-    # Get schema from the DataFrame
-    actual_schema = df_f_inv_movmnt.schema
-    
-    # Ensure the DataFrame's schema matches the expected schema
-    assert actual_schema == expected_schema, "Schema validation failed"
-
-@pytest.mark.parametrize("flag, expected", [
-    ("Y", True),
-    ("N", False),
-    (None, False),
-])
-def test_flag_active_conditions(flag, expected):
-    # Logic to test flag_active conditions
-    result = flag == "Y"
-    assert result == expected, f"{flag} did not return {expected}"
-
-# Pytest options for running tests in Databricks
+# Execute the tests using a test runner like pytest
+# This section is intended to be run in a unit test framework, not directly in a notebook cell
 if __name__ == "__main__":
-    pytest.main(["-v", __file__])
-
+    # Run the PySpark tests
+    pytest.main([__file__])
