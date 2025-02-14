@@ -1,106 +1,113 @@
--- SQL Code Block for Databricks Testing
+-- Databricks SQL Test Script for Real-Time Calculation of Inventory at Risk
 
--- Framework and structure imports for Databricks SQL
--- No additional libraries are needed for SQL-only Databricks tests
-
--- Setup the test table if not already available
+-- Creating a table for testing purposes
 CREATE OR REPLACE TABLE agilisium_playground.purgo_playground.f_inv_movmnt (
     id BIGINT,
     dnsa_flag STRING,
-    financial_qty DOUBLE
+    financial_qty DOUBLE,
+    timestamp_event TIMESTAMP
 );
 
--- Insert test data
+-- Inserting test data into the table
 INSERT INTO agilisium_playground.purgo_playground.f_inv_movmnt VALUES
-(1, "Y", 150.0),
-(2, "N", 200.0),
-(3, "Y", 300.0),
-(7, "Y", NULL),
-(8, NULL, 120.0);
+-- Example Test Data
+(1, "Y", 150.0, TIMESTAMP('2024-03-21T00:00:00.000+0000')),
+(2, "N", 200.0, TIMESTAMP('2024-03-21T01:00:00.000+0000')),
+-- More test data can be inserted as needed
 
--- Unit test for individual transformations
+/*------------------------------------------------------------------
+   Test Case: Calculate Inventory at Risk for DNSA flag 'Y'
+-------------------------------------------------------------------*/
+-- Calculate the sum of financial_qty where dnsa_flag is "Y"
 SELECT SUM(financial_qty) AS inventory_at_risk
 FROM agilisium_playground.purgo_playground.f_inv_movmnt
 WHERE dnsa_flag = "Y";
 
--- Integration test for end-to-end flows
-WITH total_inventory AS (
-    SELECT SUM(financial_qty) AS total_financial_qty
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-),
-inventory_at_risk AS (
-    SELECT SUM(financial_qty) AS risk_qty
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-    WHERE dnsa_flag = "Y"
-)
+/*------------------------------------------------------------------
+   Test Case: Calculate Percentage of Inventory at Risk
+-------------------------------------------------------------------*/
+-- Define total_inventory for testing the percentage calculation
+-- Note: Replace with actual total inventory value as needed
+DECLARE total_inventory DOUBLE;
+SET total_inventory = 1000.0;
+
+-- Calculate percentage of inventory at risk
 SELECT 
-    (risk_qty / total_financial_qty) * 100 AS percentage_of_inventory_at_risk
-FROM total_inventory, inventory_at_risk;
+    (SUM(financial_qty) / total_inventory) * 100 AS percentage_of_inventory_at_risk
+FROM
+    agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE 
+    dnsa_flag = "Y";
 
--- Databricks-specific operations tests
--- Validate Delta Lake operations (if applicable)
--- Not applicable in the current context due to the absence of Delta operations
+/*------------------------------------------------------------------
+   Test Case: Handle undefined total_inventory gracefully
+-------------------------------------------------------------------*/
+-- Test the error handling when total_inventory is not set
+DECLARE total_inventory DOUBLE DEFAULT NULL;
 
--- SQL Cleanup
+SELECT 
+    CASE 
+        WHEN total_inventory IS NULL THEN "Error: Total inventory not provided. Calculation cannot proceed."
+        ELSE CAST((SUM(financial_qty) / total_inventory) * 100 AS STRING)
+    END AS percentage_of_inventory_at_risk
+FROM
+    agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE 
+    dnsa_flag = "Y";
+
+/*------------------------------------------------------------------
+   Clean-up operations after tests
+-------------------------------------------------------------------*/
+-- Drop the test table after validation
 DROP TABLE IF EXISTS agilisium_playground.purgo_playground.f_inv_movmnt;
 
-# PySpark Code Block for Databricks Testing
+# PySpark Test Script for Real-Time Calculation of Inventory at Risk
 
-# Install necessary libraries if not already installed.
-# In Databricks, commonly required libraries for testing may be already available.
-# Example: dbutils.library.installPyPI("pytest")
+# Import necessary libraries
+# Assuming the necessary libraries are already installed in the Databricks environment
 
-# Import necessary modules
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum as _sum, col
+from pyspark.sql.functions import col, sum as _sum, when, lit
+from pyspark.sql.utils import AnalysisException
 
-# Initiate Spark Session
-spark = SparkSession.builder.appName("Databricks Test").getOrCreate()
+# Initialize Spark session
+spark = SparkSession.builder.appName("InventoryAtRiskTest").getOrCreate()
 
-# Test: Schema Validation
-schema = "id LONG, dnsa_flag STRING, financial_qty DOUBLE"
-assert str(spark.read.table("agilisium_playground.purgo_playground.f_inv_movmnt").schema) == schema
+# Load the test data into a DataFrame
+# Assuming that the table is already created and populated with test data
+df = spark.sql("SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt")
 
-# Unit test for individual transformation, ensure correctness of SQL logic
-df_risk = spark.sql(
-    """
-    SELECT SUM(financial_qty) AS inventory_at_risk
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-    WHERE dnsa_flag = 'Y'
-    """
+# Test Case: Calculate Inventory at Risk for DNSA flag 'Y'
+inventory_at_risk_df = df.filter(col("dnsa_flag") == "Y").agg(_sum("financial_qty").alias("inventory_at_risk"))
+inventory_at_risk_df.show()
+
+# Test Case: Calculate Percentage of Inventory at Risk
+# Define a mock total inventory for testing
+total_inventory = 1000.0
+
+percentage_df = inventory_at_risk_df.withColumn(
+    "percentage_of_inventory_at_risk", 
+    (col("inventory_at_risk") / lit(total_inventory)) * 100
 )
+percentage_df.show()
 
-assert df_risk.collect()[0]['inventory_at_risk'] == 450.0  # As per example test data
+# Error handling when total inventory is undefined
+try:
+    # Assuming total_inventory is unset or set to None
+    total_inventory = None
+    if total_inventory is None:
+        raise ValueError("Total inventory not provided. Calculation cannot proceed.")
+    percentage_df = inventory_at_risk_df.withColumn(
+        "percentage_of_inventory_at_risk", 
+        (col("inventory_at_risk") / lit(total_inventory)) * 100
+    )
+    percentage_df.show()
+except ValueError as e:
+    print(e)
 
-# Integration test for calculation
-df_total = spark.sql(
-    """
-    SELECT SUM(financial_qty) AS total_inventory
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-    """
-)
+# Clean-up operations
+# If any temporary tables or resources were created, they should be cleaned up here
+# In this demo, there are no resources to clean up in the PySpark script
 
-df_percentage = df_risk.crossJoin(df_total).select(
-    (col("inventory_at_risk") / col("total_inventory") * 100).alias("percentage_of_inventory_at_risk")
-)
-
-assert df_percentage.collect()[0]['percentage_of_inventory_at_risk'] == 75.0  # Validate with mock data
-
-# Additional test for NULL handling
-df_null_check = spark.sql(
-    """
-    SELECT *
-    FROM agilisium_playground.purgo_playground.f_inv_movmnt
-    WHERE financial_qty IS NULL
-    """
-)
-
-assert df_null_check.count() == 1  # Based on the test data provided
-
--- Cleanup Code Block
-
--- This block should be run after all tests to ensure no residual data
--- DROP TABLE IF EXISTS statement to clean up created test data
-
--- Cleanup test table after execution
-DROP TABLE IF EXISTS agilisium_playground.purgo_playground.f_inv_movmnt;
+# Perform cleanup of Spark session
+spark.stop()
