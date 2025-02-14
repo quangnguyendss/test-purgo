@@ -1,108 +1,76 @@
--- SQL Code for Data Integration and Validation
+-- SQL Code for Data Extraction and Validation
 
 /* 
-  Section: Data Integration and Validation
-  This section handles the integration of data from sample_users_data to sample_sales_data
-  and includes validation and error handling.
+  Section: Data Extraction
+  Extract valid records from the sample_users_data table
 */
 
--- Step 1: Filter valid records from sample_users_data
-CREATE OR REPLACE TEMP VIEW valid_users_data AS
-SELECT 
-  country_cd, 
-  product_id, 
-  qty_sold, 
-  sales_date
-FROM purgo_playground.sample_users_data
+SELECT country_cd, product_id, qty_sold, sales_date, valid
+FROM agilisium_playground.purgo_playground.sample_users_data
 WHERE valid = 1;
 
--- Step 2: Merge valid records into sample_sales_data
-MERGE INTO purgo_playground.sample_sales_data AS target
-USING valid_users_data AS source
-ON target.country_cd = source.country_cd AND target.product_id = source.product_id
-WHEN MATCHED THEN
-  UPDATE SET target.qty_sold = target.qty_sold + source.qty_sold
-WHEN NOT MATCHED THEN
-  INSERT (country_cd, product_id, qty_sold, sales_date)
-  VALUES (source.country_cd, source.product_id, source.qty_sold, source.sales_date);
+/* 
+  Section: Data Validation
+  Validate the format and integrity of the extracted data
+*/
 
--- Step 3: Log error for invalid records
-SELECT 
-  "Record is invalid and cannot be integrated" AS error_message,
-  country_cd, 
-  product_id, 
-  qty_sold, 
-  sales_date
-FROM purgo_playground.sample_users_data
-WHERE valid = 0;
+-- Validate country_cd format
+SELECT * FROM agilisium_playground.purgo_playground.sample_users_data
+WHERE valid = 1
+AND country_cd NOT REGEXP '^[A-Z]{2}$';
 
--- Step 4: Log error for missing data
-SELECT 
-  "Missing data in " || column_name AS error_message
-FROM (
-  SELECT 
-    CASE 
-      WHEN country_cd IS NULL THEN 'country_cd'
-      WHEN product_id IS NULL THEN 'product_id'
-      WHEN qty_sold IS NULL THEN 'qty_sold'
-      WHEN sales_date IS NULL THEN 'sales_date'
-    END AS column_name
-  FROM purgo_playground.sample_users_data
-) WHERE column_name IS NOT NULL;
+-- Validate product_id format
+SELECT * FROM agilisium_playground.purgo_playground.sample_users_data
+WHERE valid = 1
+AND product_id NOT REGEXP '^P\d{4}$';
 
--- Step 5: Optimize the sample_sales_data table
-OPTIMIZE purgo_playground.sample_sales_data ZORDER BY (country_cd, product_id);
+-- Validate qty_sold is positive
+SELECT * FROM agilisium_playground.purgo_playground.sample_users_data
+WHERE valid = 1
+AND qty_sold < 0;
 
--- Step 6: Vacuum the sample_sales_data table to remove old files
-VACUUM purgo_playground.sample_sales_data RETAIN 168 HOURS;
+-- Validate sales_date format
+SELECT * FROM agilisium_playground.purgo_playground.sample_users_data
+WHERE valid = 1
+AND sales_date NOT REGEXP '^\d{4}-\d{2}-\d{2}$';
 
-# PySpark Code for Data Integration and Validation
+# PySpark Code for Data Extraction and Validation
 
-# Section: Data Integration and Validation
-# This section handles the integration of data from sample_users_data to sample_sales_data
-# and includes validation and error handling.
+# Import necessary libraries
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
+from pyspark.sql.functions import col
 
-from pyspark.sql.functions import col, sum as spark_sum, when, lit
+# Define schema for sample_users_data
+schema = StructType([
+    StructField("country_cd", StringType(), True),
+    StructField("product_id", StringType(), True),
+    StructField("qty_sold", IntegerType(), True),
+    StructField("sales_date", DateType(), True),
+    StructField("valid", IntegerType(), True)
+])
 
-# Load sample_users_data into DataFrame
-users_df = spark.read.format("delta").load("/path/to/sample_users_data")
+# Load data from the Delta table
+df = spark.read.format("delta").schema(schema).load("/mnt/delta/agilisium_playground/purgo_playground/sample_users_data")
 
-# Step 1: Filter valid records
-valid_users_df = users_df.filter(col("valid") == 1)
+# Filter for valid records
+valid_df = df.filter(col("valid") == 1)
 
-# Step 2: Aggregate qty_sold for valid records
-aggregated_df = valid_users_df.groupBy("country_cd", "product_id").agg(
-    spark_sum("qty_sold").alias("total_qty_sold")
-)
+# Data Quality Test: Validate country_cd format
+invalid_country_cd_df = valid_df.filter(~col("country_cd").rlike("^[A-Z]{2}$"))
+if invalid_country_cd_df.count() > 0:
+    raise ValueError("Invalid country code format detected")
 
-# Step 3: Merge valid records into sample_sales_data
-aggregated_df.createOrReplaceTempView("aggregated_view")
-spark.sql("""
-    MERGE INTO purgo_playground.sample_sales_data AS target
-    USING aggregated_view AS source
-    ON target.country_cd = source.country_cd AND target.product_id = source.product_id
-    WHEN MATCHED THEN
-      UPDATE SET target.qty_sold = target.qty_sold + source.total_qty_sold
-    WHEN NOT MATCHED THEN
-      INSERT (country_cd, product_id, qty_sold, sales_date)
-      VALUES (source.country_cd, source.product_id, source.total_qty_sold, current_date())
-""")
+# Data Quality Test: Validate product_id format
+invalid_product_id_df = valid_df.filter(~col("product_id").rlike("^P\d{4}$"))
+if invalid_product_id_df.count() > 0:
+    raise ValueError("Invalid product ID format detected")
 
-# Step 4: Log error for invalid records
-invalid_records_df = users_df.filter(col("valid") == 0)
-invalid_records_df.withColumn("error_message", lit("Record is invalid and cannot be integrated")).show()
+# Data Quality Test: Validate qty_sold is positive
+negative_qty_sold_df = valid_df.filter(col("qty_sold") < 0)
+if negative_qty_sold_df.count() > 0:
+    raise ValueError("Quantity sold cannot be negative")
 
-# Step 5: Log error for missing data
-missing_data_df = users_df.filter(
-    col("country_cd").isNull() | 
-    col("product_id").isNull() | 
-    col("qty_sold").isNull() | 
-    col("sales_date").isNull()
-)
-missing_data_df.withColumn("error_message", lit("Missing data in one or more columns")).show()
-
-# Step 6: Optimize the sample_sales_data table
-spark.sql("OPTIMIZE purgo_playground.sample_sales_data ZORDER BY (country_cd, product_id)")
-
-# Step 7: Vacuum the sample_sales_data table to remove old files
-spark.sql("VACUUM purgo_playground.sample_sales_data RETAIN 168 HOURS")
+# Data Quality Test: Validate sales_date format
+invalid_sales_date_df = valid_df.filter(~col("sales_date").cast("string").rlike("^\d{4}-\d{2}-\d{2}$"))
+if invalid_sales_date_df.count() > 0:
+    raise ValueError("Invalid sales date format detected")
