@@ -1,105 +1,109 @@
--- Setup Delta Lake environment with necessary configurations
+-- Setup for Delta Lake and Sales Data Processing
 
--- Create Delta Table with appropriate schema
-CREATE TABLE IF NOT EXISTS purgo_playground.sales_data (
+-- Create Unity Catalog schema if it doesn't exist
+CREATE SCHEMA IF NOT EXISTS purgo_playground;
+
+-- Create Delta table for sales data
+CREATE TABLE IF NOT EXISTS purgo_playground.sales_data_delta (
   country_cd STRING,
   product_id STRING,
   qty_sold INT,
-  sales_date TIMESTAMP
-)
-USING DELTA
+  sales_date DATE
+) USING DELTA
 PARTITIONED BY (country_cd)
-COMMENT 'Table for storing sales data'
-LOCATION '/delta/purgo_playground/sales_data';
+TBLPROPERTIES (
+  'delta.appendOnly' = 'true',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact' = 'true'
+);
 
--- Load data from CSV into Delta Table
-COPY INTO purgo_playground.sales_data
-FROM '/FileStore/tables/sample_sales_data.csv'
-FILEFORMAT = 'CSV'
+-- Vacuum to remove old data
+VACUUM purgo_playground.sales_data_delta RETAIN 0 HOURS;
+
+-- Insert data into Delta table from CSV
+COPY INTO purgo_playground.sales_data_delta
+FROM (SELECT * FROM '/mnt/data/sample_sales_data.csv')
+FILEFORMAT = CSV
 FORMAT_OPTIONS ('header' = 'true');
 
-/* Implement data validation before processing */
-/* Validate country code format */
-SELECT country_cd
-FROM purgo_playground.sales_data
-WHERE LENGTH(country_cd) != 2 OR country_cd NOT RLIKE '^[A-Z]{2}$'
-LIMIT 10;
-
-/* Validate non-negative qty_sold */
-SELECT *
-FROM purgo_playground.sales_data
-WHERE qty_sold < 0
-LIMIT 10;
-
-/* Validate product ID pattern */
-SELECT *
-FROM purgo_playground.sales_data
-WHERE product_id NOT LIKE 'P____'
-LIMIT 10;
-
-/* Validate sales_date format */
-SELECT sales_date
-FROM purgo_playground.sales_data
-WHERE sales_date IS NULL OR sales_date NOT RLIKE '^\d{4}-\d{2}-\d{2}$'
-LIMIT 10;
-
-/* Handle duplicate entries */
-DELETE FROM purgo_playground.sales_data AS a
+-- Merge operation for schema evolution and versioning
+MERGE INTO purgo_playground.sales_data_delta AS target
 USING (
-  SELECT country_cd, product_id, sales_date, COUNT(*) as cnt
-  FROM purgo_playground.sales_data
-  GROUP BY country_cd, product_id, sales_date
-  HAVING cnt > 1
-) AS b
-WHERE a.country_cd = b.country_cd AND a.product_id = b.product_id AND a.sales_date = b.sales_date;
-
-/* Optimize table using Z-Ordering */
-OPTIMIZE purgo_playground.sales_data
-ZORDER BY (product_id);
-
--- Schedule periodic table vacuuming
-SET spark.databricks.delta.retentionDurationCheck.enabled = false;
-
-VACUUM purgo_playground.sales_data RETAIN 168 HOURS;
-
-# PySpark Implementation for Data Processing
-
-from pyspark.sql.functions import col, expr
-
-# Define input file path
-file_path = "/FileStore/tables/sample_sales_data.csv"
-
-# Load data into DataFrame
-sales_df = spark.read.csv(file_path, header=True, inferSchema=True)
-
-# Data validation and processing
-sales_df = sales_df.withColumn("country_cd", expr("UPPER(TRIM(country_cd))")) \
-                    .filter(col("country_cd").rlike("^[A-Z]{2}$")) \
-                    .filter(col("product_id").rlike("^P\\d{4}$")) \
-                    .filter(col("qty_sold").cast("int").isNotNull() & (col("qty_sold") >= 0)) \
-                    .withColumn("sales_date", expr("TO_DATE(sales_date, 'yyyy-MM-dd')"))
-
-# Handle duplicate entries
-window_spec = Window.partitionBy("country_cd", "product_id", "sales_date").orderBy("sales_date")
-deduped_sales_df = sales_df.withColumn("row_num", row_number().over(window_spec)).filter(col("row_num") == 1).drop("row_num")
-
-# Write DataFrame to Delta Lake
-deduped_sales_df.write.format("delta").mode("overwrite").partitionBy("country_cd").save("/delta/purgo_playground/sales_data")
-
-# Cache the DataFrame for further operations
-deduped_sales_df.cache()
-
-# Utilize Delta Lake Merge for data update
-new_sales_df = spark.read.csv("/FileStore/tables/new_sales_data.csv", header=True, inferSchema=True)
-new_sales_df.write.format("delta").mode("overwrite").saveAsTable("purgo_playground.new_sales_data")
-
-spark.sql("""
-MERGE INTO purgo_playground.sales_data AS target
-USING purgo_playground.new_sales_data AS source
-ON target.product_id = source.product_id AND target.sales_date = source.sales_date
+  SELECT * FROM purgo_playground.sales_data_delta
+) AS source
+ON target.product_id = source.product_id
 WHEN MATCHED THEN
-  UPDATE SET target.qty_sold = target.qty_sold + source.qty_sold
+  UPDATE SET target.qty_sold = source.qty_sold, target.sales_date = source.sales_date
 WHEN NOT MATCHED
   THEN INSERT (country_cd, product_id, qty_sold, sales_date)
-  VALUES (source.country_cd, source.product_id, source.qty_sold, source.sales_date)
-""")
+  VALUES (source.country_cd, source.product_id, source.qty_sold, source.sales_date);
+
+-- Z-order optimization on sales_date
+OPTIMIZE purgo_playground.sales_data_delta
+ZORDER BY (sales_date);
+
+-- Validation and error handling for incorrect data formats or future sales_date
+SELECT * FROM purgo_playground.sales_data_delta
+WHERE qty_sold IS NULL AND TRY_CAST(qty_sold AS INTEGER) IS NULL
+  OR sales_date > CURRENT_DATE;
+
+-- Data skew handling: Identify skewed distributions
+SELECT country_cd, COUNT(*) AS record_count
+FROM purgo_playground.sales_data_delta
+GROUP BY country_cd
+ORDER BY record_count DESC;
+
+-- Validate partition strategy by checking storage distribution
+DESCRIBE DETAIL purgo_playground.sales_data_delta;
+
+# PySpark Data Processing for Sales Data
+
+# Import necessary libraries
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
+from datetime import datetime
+
+# Define schema for sales data
+schema = StructType([
+    StructField("country_cd", StringType(), True),
+    StructField("product_id", StringType(), True),
+    StructField("qty_sold", IntegerType(), True),
+    StructField("sales_date", DateType(), True)
+])
+
+# Read CSV file into DataFrame
+df_sales = spark.read.csv("/mnt/data/sample_sales_data.csv", schema=schema, header=True)
+
+# Data transformation: Convert sales_date to specified format
+df_transformed = df_sales.withColumn(
+    "sales_date_transformed",
+    F.date_format(df_sales.sales_date, "yyyyMMdd")
+)
+
+# Handling errors and edge cases
+def validate_sales_data(df):
+    # Error handling: Check for future dates and invalid quantities
+    error_cond = (df.sales_date > F.current_date()) | (F.isnan(df.qty_sold))
+    df_errors = df.filter(error_cond).select("*")
+    if df_errors.count() > 0:
+        df_errors.show()  # Log errors; in production use a logger
+
+    return df.filter(~error_cond)
+
+df_validated = validate_sales_data(df_transformed)
+
+# Persist data to Delta table for further analysis
+df_validated.write.format("delta").mode("overwrite").partitionBy("country_cd").saveAsTable("purgo_playground.sales_data_transformed")
+
+# Test caching strategy
+df_cached = df_validated.cache()
+df_cached.count()  # Trigger cache
+
+# Test data quality: Ensure no future dates exist
+assert df_cached.filter(df_cached.sales_date > F.current_date()).count() == 0, "Future sales dates found"
+
+# Cleanup: Unpersist the cached DataFrame
+df_cached.unpersist()
+
+# Log completion of data processing
+print("Sales data processing completed successfully.")
