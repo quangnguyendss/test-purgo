@@ -1,68 +1,52 @@
-Feature: Sales Data Processing in Unity Catalog
+Feature: Sales Data Processing
 
-  Background: Initial Setup
-    Given a Unity Catalog schema named "purgo_playground"
-    And a dataset is available in a CSV format
+  Scenario: Happy Path - Successful Data Ingestion and Storage
+    Given the sales data file "sample_sales_data.csv" is available
+    When the data is ingested into the Unity Catalog schema "purgo_playground"
+    Then the data must be successfully stored with correct data types:
+      | Field       | Data Type |
+      | country_cd  | STRING    |
+      | product_id  | STRING    |
+      | qty_sold    | INTEGER   |
+      | sales_date  | DATE      |
 
-  Scenario Outline: Validate Sales Data Entry
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a record is processed with country code "<country_cd>", product ID "<product_id>", quantity sold "<qty_sold>", and sales date "<sales_date>"
-    Then the record should be successfully validated if it meets the criteria
+  Scenario: Validation - Incorrect Data Format
+    Given the sales data file contains "qty_sold" with values in a non-numeric format
+    When an attempt is made to ingest the data
+    Then the process should fail with the error message "Invalid data format for 'qty_sold'. Expected INTEGER."
 
-    Examples:
-      | country_cd | product_id | qty_sold | sales_date |
-      | US         | P1001      | 50       | 2024-01-15 |
-      | US         | P1002      | 30       | 2024-01-16 |
-      | CA         | P1001      | 40       | 2024-01-15 |
-      | CA         | P1003      | 25       | 2024-01-17 |
-      | UK         | P1002      | 35       | 2024-01-18 |
-      | UK         | P1004      | 20       | 2024-01-19 |
-      | IN         | P1001      | 60       | 2024-01-20 |
-      | IN         | P1003      | 45       | 2024-01-21 |
-      | AU         | P1004      | 55       | 2024-01-22 |
-      | AU         | P1002      | 38       | 2024-01-23 |
+  Scenario: Validation - Future Date in Sales Date
+    Given the sales data file contains "sales_date" in the future
+    When an attempt is made to ingest the data
+    Then the process should fail with the error message "Sales date cannot be in the future."
 
-  Scenario: Validate Country Code Format
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a record is processed
-    Then the field "country_cd" must be a valid ISO 3166-1 alpha-2 country code
+  Scenario Outline: Data Transformation and Preprocessing
+    Given the sales data file with entries <qty_sold> and <sales_date>
+    When preprocessing for <country_cd> and <product_id>
+    Then the data should be transformed to match required analysis format
+      | qty_sold_transformed | sales_date_transformed |
+    Where:
+      | country_cd | product_id | qty_sold | sales_date  | qty_sold_transformed | sales_date_transformed |
+      | US         | P1001      | 50       | 2024-01-15  | 50                   | 20240115               |
+      | UK         | P1002      | 30       | 2024-01-16  | 30                   | 20240116               |
 
-  Scenario: Validate Non-Negative Quantity Sold
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a record is processed
-    Then the field "qty_sold" must be a non-negative integer
+  Scenario: Security and Compliance Adherence
+    Given the sales data is ingested into the catalog
+    When accessing the data
+    Then ensure data is encrypted at rest and in transit
+    And comply with relevant data protection regulations
 
-  Scenario: Validate Product ID Format
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a record is processed
-    Then the field "product_id" must match the pattern "P\d{4}"
+  Scenario: Error Handling - Database Connectivity
+    Given the database connection is not established
+    When an attempt is made to ingest data
+    Then the process should abort with the error message "Failed to connect to database. Check your network connection."
 
-  Scenario: Validate Sales Date Format
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a record is processed
-    Then the field "sales_date" must be in "YYYY-MM-DD" format
+  Background:
+    Given the Unity Catalog schema "purgo_playground" is created and accessible
 
-  Scenario: Handle Missing Data Entries
-    Given the dataset has been checked for completeness
-    When a record is missing any data entries
-    Then an error message "Missing data in one or more fields" should be generated
-
-  Scenario: Duplicate Entry Error
-    Given the dataset is loaded into the "purgo_playground" schema
-    When a duplicate entry is processed
-    Then an error message "Duplicate entry detected" should be generated
-
-  Scenario Outline: Successful Data Processing
-    Given the record is valid
-    When processed in the schema "purgo_playground"
-    Then the record is stored successfully
-
-    Examples:
-      | country_cd | product_id | qty_sold | sales_date |
-      | US         | P1001      | 50       | 2024-01-15 |
-      | IN         | P1003      | 45       | 2024-01-21 |
-  
-  Scenario: Invalid Sales Date
-    Given the dataset is loaded into the "purgo_playground" schema
-    When the "sales_date" is not in a valid format
-    Then an error message "Invalid sales date format" should be generated
+  Examples:
+    | country_cd | product_id | qty_sold | sales_date  |
+    | US         | P1001      | 50       | 2024-01-15  |
+    | CA         | P1003      | 25       | 2024-01-17  |
+    | IN         | P1001      | 60       | 2024-01-20  |
+    | AU         | P1004      | 55       | 2024-01-22  |
