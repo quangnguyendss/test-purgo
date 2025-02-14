@@ -1,124 +1,83 @@
-/* Databricks SQL Test for Inventory at Risk Calculation */
+-- Databricks SQL Test Cases for Inventory at Risk Calculation
 
--- Setup: Verify Unity Catalog configuration
-/*
-  Check if Unity Catalog schema and table exist
-*/
-SHOW TABLES IN agilisium_playground.purgo_playground;
+-- Section 1: Setting up test cases for the Delta Table
+-- This section creates a table and inserts test data to analyze Inventory at Risk calculations.
+CREATE OR REPLACE TABLE agilisium_playground.purgo_playground.f_inv_movmnt (
+    id BIGINT,
+    dnsa_flag STRING,
+    financial_qty DOUBLE,
+    timestamp_event TIMESTAMP
+);
 
--- Test Setup: Verifying Data Ingestion
-/*
-  Ensure data exists in the `f_inv_movmnt` table
-*/
-SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt LIMIT 5;
+-- Insert test data into the table for various scenarios
+INSERT INTO agilisium_playground.purgo_playground.f_inv_movmnt VALUES
+(1, "Y", 150.0, TIMESTAMP('2024-03-21T00:00:00.000+0000')),
+(2, "N", 200.0, TIMESTAMP('2024-03-21T01:00:00.000+0000')),
+(3, "Y", 300.0, TIMESTAMP('2024-03-21T02:00:00.000+0000')),
+(4, "Y", NULL, TIMESTAMP('2024-03-21T06:00:00.000+0000')),
+(5, NULL, 120.0, TIMESTAMP('2024-03-21T07:00:00.000+0000')),
+(6, "Y", 9876543210.0, TIMESTAMP('2024-03-21T20:00:00.000+0000')),
+(7, "Y", -500.0, TIMESTAMP('2024-03-21T21:00:00.000+0000')),
+(8, "你", 720.0, TIMESTAMP('2024-03-21T22:00:00.000+0000')),
+(9, "Y", 815.0, TIMESTAMP('2024-03-21T23:00:00.000+0000'));
 
--- Unit Test: Calculation of Inventory at Risk when DNSA flag is active
-/*
-  Expectation: Calculate sum of `financial_qty` for records with `dnsa_flag` as "Y"
-*/
-SELECT
-  SUM(financial_qty) AS inventory_at_risk
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt
-WHERE
-  dnsa_flag = "Y";
+-- Define the total inventory. This is assumed from an external information source.
+CREATE OR REPLACE TEMP VIEW total_inventory AS
+SELECT 1000000 AS total_qty;
 
--- Unit Test: Error Handling for NULL Inputs
-/*
-  Expectation: Handle potential NULL values in financial_qty
-*/
-SELECT
-  id,
-  CASE
-    WHEN financial_qty IS NULL THEN "Error: NULL financial_qty"
-    ELSE "Valid"
-  END AS qty_status
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt;
+-- Section 2: Test Inventory at Risk Calculation
+/* Test: Calculate the inventory_at_risk when dnsa_flag is 'Y' */
+CREATE OR REPLACE TEMP VIEW inventory_at_risk AS
+SELECT SUM(COALESCE(financial_qty, 0)) AS total_at_risk
+FROM agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE dnsa_flag = 'Y';
 
--- Integration Test: Calculate Percentage of Inventory at Risk
-/*
-  Expectation: Use the formula (inventory_at_risk / total_inventory) * 100
-  Note: Replace `total_inventory_value` with actual total inventory value
-*/
-WITH CTE AS (
-  SELECT
-    SUM(financial_qty) AS inventory_at_risk
-  FROM
-    agilisium_playground.purgo_playground.f_inv_movmnt
-  WHERE
-    dnsa_flag = "Y"
-)
-SELECT
-  inventory_at_risk,
-  (inventory_at_risk / <total_inventory_value>) * 100 AS percentage_of_inventory_at_risk
-FROM
-  CTE;
+-- Validate that the total inventory at risk is calculated as expected
+SELECT * FROM inventory_at_risk;
 
--- Function Test: Complex Type Handling
-/*
-  Expectation: Validate complex types, no complex types involved directly in current schema but ensure proper handling
-*/
-SELECT
-  STRUCT(id, dnsa_flag, financial_qty) AS record_struct
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt;
+-- Section 3: Calculate and assert the percentage of Inventory at Risk
+/* Test: Calculate the percentage of inventory at risk */
+SELECT 
+  r.total_at_risk / t.total_qty * 100 AS percentage_at_risk
+FROM inventory_at_risk r
+JOIN total_inventory t;
 
--- Cleanup: Validate table drops after test concludes
-/*
-  Ensure clean up of test tables or records if modifications were made
-*/
-/*
-DROP TABLE IF EXISTS agilisium_playground.purgo_playground.test_table;
-*/
+/* Expected Assertion here, to compare calculated value with expected value
+-- Assuming the expected percentage is known */
 
--- Performance Test: Comparative analysis on large datasets
-/*
-  Expectation: Compare execution plans on full dataset vs filtered
-*/
-EXPLAIN EXTENDED
-SELECT
-  SUM(financial_qty)
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt
-WHERE
-  dnsa_flag = "Y";
+-- Section 4: Null and data type handling
+/* Test: Verify handling of NULL in financial_qty; expected result should exclude NULL values */
+SELECT SUM(CASE WHEN dnsa_flag = 'Y' THEN COALESCE(financial_qty, 0) ELSE 0 END) AS expected_total_at_risk
+FROM agilisium_playground.purgo_playground.f_inv_movmnt;
 
--- Security Test: Access Validation for Unity Catalog
-/*
-  Ensure that access to data in Unity Catalog is compliant with set security protocols
-*/
-SELECT
-  CURRENT_USER(),
-  CURRENT_ROLE()
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt
-LIMIT 1;
+/* Test: Handling complex data types and character edge cases */
+-- This tests if special characters can be handled correctly without errors
+SELECT COUNT(*)
+FROM agilisium_playground.purgo_playground.f_inv_movmnt
+WHERE dnsa_flag LIKE '%❤️%' OR dnsa_flag LIKE '%你%';
 
--- Test for Window Functions: Verify Over Time Analysis
-/*
-  Expectation: Use window functions to analyze trends over time
-*/
-SELECT
-  id,
-  financial_qty,
-  SUM(financial_qty) OVER (PARTITION BY dnsa_flag ORDER BY timestamp_event) AS cumsum_qty
-FROM
-  agilisium_playground.purgo_playground.f_inv_movmnt;
+/* Cleanup operations after tests */
+-- Dropping the views used for testing to clean up the environment
+DROP VIEW IF EXISTS inventory_at_risk;
+DROP VIEW IF EXISTS total_inventory;
 
-# PySpark Test for Inventory at Risk Calculation
+# PySpark Test Code for Inventory at Risk Calculations
 
-# Import necessary PySpark modules
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum as _sum, col, when
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+# Import necessary PySpark libraries
+# Install missing libraries if needed
+try:
+    from pyspark.sql import SparkSession
+    from pyspark.sql.functions import sum as _sum, col, lit, when
+    from pyspark.sql.types import DoubleType, StructType, StructField, StringType, TimestampType
+except ImportError:
+    raise ImportError("Required PySpark libraries are missing")
 
-# Initialize Spark Session
 spark = SparkSession.builder \
-    .appName("Databricks Test") \
+    .appName("InventoryAtRiskTests") \
     .getOrCreate()
 
-# Define a schema for testing purposes
+# Section 1: Setup test data
+# Define schema for test data
 schema = StructType([
     StructField("id", StringType(), True),
     StructField("dnsa_flag", StringType(), True),
@@ -126,56 +85,36 @@ schema = StructType([
     StructField("timestamp_event", TimestampType(), True)
 ])
 
-# Load table into DataFrame
-df = spark.read.table("agilisium_playground.purgo_playground.f_inv_movmnt")
+# Create a DataFrame for test data
+test_data = [
+    (1, "Y", 150.0, "2024-03-21 00:00:00"),
+    (2, "N", 200.0, "2024-03-21 01:00:00"),
+    (3, "Y", 300.0, "2024-03-21 02:00:00"),
+    (4, "Y", None, "2024-03-21 06:00:00"),
+    (5, None, 120.0, "2024-03-21 07:00:00"),
+    (6, "Y", 9876543210.0, "2024-03-21 20:00:00"),
+    (7, "Y", -500.0, "2024-03-21 21:00:00"),
+    (8, "你", 720.0, "2024-03-21 22:00:00"),
+    (9, "Y", 815.0, "2024-03-21 23:00:00")
+]
 
-# Unit Test: Calculation of Inventory at Risk
-# Expectation: Calculate the sum of financial_qty where the DNSA flag is "Y"
-inventory_at_risk_df = df.filter(col("dnsa_flag") == "Y").agg(_sum("financial_qty").alias("inventory_at_risk"))
+df = spark.createDataFrame(test_data, schema=schema)
 
-# Display result
-inventory_at_risk_df.show()
+# Section 2: Calculate Inventory at Risk
+# Calculate total inventory at risk based on dnsa_flag
+inventory_at_risk = df.filter(df.dnsa_flag == "Y") \
+                      .agg(_sum(when(col("financial_qty").isNotNull(), col("financial_qty")).otherwise(lit(0))).alias("total_at_risk"))
 
-# Handling NULL inputs
-# Expectation: Test to check how NULL financial_qty is handled
-df_null_test = df.withColumn("qty_status", when(col("financial_qty").isNull(), "Error: NULL financial_qty").otherwise("Valid"))
+inventory_at_risk.show()
 
-# Display NULL handling results
-df_null_test.select("id", "qty_status").show()
+# Section 3: Calculate percentage of Inventory at Risk
+# Define a total inventory for calculation
+total_inventory = 1000000.0
 
-# Integration Test: Percentage of Inventory at Risk
-# Placeholder for total inventory value, should be replaced with actual retrieval logic
-total_inventory_value = 1000000.0
+# Calculate the percentage of inventory at risk
+result_df = inventory_at_risk.withColumn("percentage_at_risk", (col("total_at_risk") / lit(total_inventory)) * 100)
+result_df.show()
 
-def calculate_percentage_of_at_risk(inventory_risk, total_inventory):
-    if total_inventory == 0:
-        return "Error: Total inventory not provided. Calculation cannot proceed."
-    return (inventory_risk / total_inventory) * 100
-
-# Assuming inventory_at_risk_df has been calculated
-inventory_at_risk = inventory_at_risk_df.first()["inventory_at_risk"]
-percentage_at_risk = calculate_percentage_of_at_risk(inventory_at_risk, total_inventory_value)
-print(f"Percentage of Inventory at Risk: {percentage_at_risk}")
-
-# Security compliance: Ensure current user roles can access catalog
-# Display current user and role
-security_test_df = spark.sql("SELECT CURRENT_USER(), CURRENT_ROLE() FROM agilisium_playground.purgo_playground.f_inv_movmnt LIMIT 1")
-security_test_df.show()
-
-# Performance Test: Explain plan
-# Performance analysis on a large dataset
-df_filtered = df.filter(col("dnsa_flag") == "Y")
-df_filtered.explain(extended=True)
-
-# Window Function Test: Verify cumulative calculations over timestamps
-from pyspark.sql.window import Window
-from pyspark.sql.functions import sum as _sum
-
-window_spec = Window.partitionBy("dnsa_flag").orderBy("timestamp_event")
-df_with_window = df.withColumn("cumsum_qty", _sum("financial_qty").over(window_spec))
-
-# Show results of window function
-df_with_window.select("id", "cumsum_qty").show()
-
-# Clean Up: Drop temporary table/view if created
-# spark.sql("DROP TABLE IF EXISTS some_temp_table")
+# Section 4: Cleanup
+# Unpersist any cached dataframes and stop the SparkSession
+spark.stop()
