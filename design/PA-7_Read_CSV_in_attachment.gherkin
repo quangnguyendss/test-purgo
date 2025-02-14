@@ -1,58 +1,59 @@
-Feature: Create and populate the sample_sales_data table in Unity Catalog
+Feature: Data Validation and Processing for Sample Sales Data
 
   Background:
-    Given the Unity Catalog schema "purgo_playground" exists
+    Given the Unity Catalog Schema is "purgo_playground"
+    And the sample sales data is available in "purgo_playground.sample_sales_data"
+    And the sample users data is available in "purgo_playground.sample_users_data"
 
-  Scenario: Successfully create the sample_sales_data table
-    When the "sample_sales_data" table is created with columns "country_cd" (string), "product_id" (string), "qty_sold" (int), and "sales_date" (date)
-    Then the table "purgo_playground.sample_sales_data" should exist with the correct schema
+  Scenario: Validate data format and integrity
+    Given the data is loaded from "purgo_playground.sample_sales_data"
+    When the data is checked for format compliance
+    Then each "country_cd" should be a non-empty string
+    And each "product_id" should be a non-empty string
+    And each "qty_sold" should be a positive integer
+    And each "sales_date" should be in "YYYY-MM-DD" format
 
-  Scenario Outline: Successfully insert data into the sample_sales_data table
-    Given the table "purgo_playground.sample_sales_data" exists
-    When the following data is inserted into the table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | <country> | <product> | <qty>    | <date>    |
-    Then the data should exist in the table "purgo_playground.sample_sales_data"
+  Scenario: Validate data against business rules
+    Given the data is loaded from "purgo_playground.sample_sales_data"
+    When the data is validated against business rules
+    Then the "qty_sold" should not exceed 100 for any record
+    And the "sales_date" should not be a future date
 
-    Examples:
-      | country | product | qty | date       |
-      | US      | P1001  | 50  | 2024-01-15 |
-      | US      | P1002  | 30  | 2024-01-16 |
-      | CA      | P1001  | 40  | 2024-01-15 |
-      | CA      | P1003  | 25  | 2024-01-17 |
-      | UK      | P1002  | 35  | 2024-01-18 |
-      | UK      | P1004  | 20  | 2024-01-19 |
-      | IN      | P1001  | 60  | 2024-01-20 |
-      | IN      | P1003  | 45  | 2024-01-21 |
-      | AU      | P1004  | 55  | 2024-01-22 |
-      | AU      | P1002  | 38  | 2024-01-23 |
-
-
-  Scenario Outline: Attempt to insert data with invalid data type
-    Given the table "purgo_playground.sample_sales_data" exists
-    When the following data is inserted into the table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | <country> | <product> | <qty>    | <date>    |
-    Then the insertion should fail with error message "<error_message>"
+  Scenario Outline: Validate data consistency between sales and users data
+    Given the data is loaded from "purgo_playground.sample_sales_data"
+    And the data is loaded from "purgo_playground.sample_users_data"
+    When the data is compared for consistency
+    Then the "country_cd" in sales data should match "country_cd" in users data
+    And the "product_id" in sales data should match "product_id" in users data
+    And the "qty_sold" in sales data should match "qty_sold" in users data
+    And the "sales_date" in sales data should match "sales_date" in users data
+    And the "valid" field in users data should be 1
 
     Examples:
-      | country | product | qty    | date      | error_message                                     |
-      | US      | P1001  | "fifty" | 2024-01-15 | Invalid data type for qty_sold: expected int      |
-      | US      | P1002  | 30     | "invalid" | Invalid data type for sales_date: expected date |
+      | country_cd | product_id | qty_sold | sales_date  |
+      | US         | P1001      | 50       | 2024-01-15  |
+      | CA         | P1003      | 25       | 2024-01-17  |
 
-  Scenario: Attempt to insert data with null values for non-nullable columns
-    Given the table "purgo_playground.sample_sales_data" exists
-    When the following data is inserted into the table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | ""         | P1001      | 50       | 2024-01-15 |
-    Then the insertion should fail with error message "country_cd cannot be null"
+  Scenario: Handle missing or invalid data
+    Given the data is loaded from "purgo_playground.sample_sales_data"
+    When the data contains missing or invalid entries
+    Then an error message "Data validation failed: Missing or invalid entries found" should be logged
+    And the invalid records should be flagged for review
 
-  Scenario: Attempt to insert data with duplicate primary key (if defined)
-    Given the table "purgo_playground.sample_sales_data" exists and has a primary key defined
-    And the following data already exists in the table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | US         | P1001      | 50       | 2024-01-15 |
-    When the following data is inserted into the table:
-      | country_cd | product_id | qty_sold | sales_date |
-      | US         | P1001      | 60       | 2024-01-15 |
-    Then the insertion should fail with error message "Duplicate primary key violation"
+  Scenario: Process valid data for reporting
+    Given the data is validated and marked as valid
+    When the data is processed for reporting
+    Then a summary report should be generated with total "qty_sold" per "country_cd"
+    And the report should be stored in "purgo_playground.reports"
+
+  Scenario Outline: Error handling for data processing
+    Given the data is loaded from "purgo_playground.sample_sales_data"
+    When an error occurs during data processing
+    Then an error message "<error_message>" should be logged
+    And the process should be halted
+
+    Examples:
+      | error_message                              |
+      | "Database connection error"                |
+      | "Data format mismatch error"               |
+      | "Insufficient permissions to access table" |
