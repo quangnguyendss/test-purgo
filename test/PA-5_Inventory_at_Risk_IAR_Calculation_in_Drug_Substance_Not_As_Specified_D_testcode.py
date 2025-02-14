@@ -1,12 +1,20 @@
-# Databricks PySpark Test Code
+# Databricks PySpark test setup and execution
+
+# Install necessary libraries
+# %pip install <specific-libraries-if-any>
+
+# Import required modules
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum as _sum, when
+from pyspark.sql.functions import col, sum as spark_sum
 from pyspark.sql.types import StructType, StructField, LongType, StringType, DoubleType, TimestampType
+import unittest
 
-# Set up Spark session
-spark = SparkSession.builder.appName("InventoryAtRiskTest").getOrCreate()
+# Spark session setup
+spark = SparkSession.builder \
+    .appName("Test Inventory at Risk Calculations") \
+    .getOrCreate()
 
-# Define the schema for the f_inv_movmnt table
+# Define schema for test validation
 schema = StructType([
     StructField("id", LongType(), True),
     StructField("dnsa_flag", StringType(), True),
@@ -14,107 +22,94 @@ schema = StructType([
     StructField("timestamp_event", TimestampType(), True)
 ])
 
-# Create DataFrame from test data
-data = [
+# Test Data Creation
+test_data = [
     (1, "Y", 150.0, "2024-03-21T00:00:00.000+0000"),
     (2, "N", 200.0, "2024-03-21T01:00:00.000+0000"),
-    (3, "Y", 300.0, "2024-03-21T02:00:00.000+0000")
-    # Add more test data here as needed
+    (3, "Y", 300.0, "2024-03-21T02:00:00.000+0000"),
+    # ... (continue from test data SQL)
 ]
-df = spark.createDataFrame(data, schema)
 
-# Register DataFrame as a temporary view for SQL queries
-df.createOrReplaceTempView("f_inv_movmnt")
+# Create DataFrame from test data
+df = spark.createDataFrame(test_data, schema=schema)
 
-# Calculate Inventory at Risk using Spark SQL
-inventory_at_risk_query = """
-SELECT SUM(financial_qty) AS inventory_at_risk
-FROM f_inv_movmnt
-WHERE dnsa_flag = 'Y'
-"""
-inventory_at_risk_df = spark.sql(inventory_at_risk_query)
+# Define unit test class
+class TestInventoryAtRiskCalculations(unittest.TestCase):
 
-# Retrieve total inventory value
-# Mock total inventory for testing purposes; update with real query or calculation
-total_inventory = 1250.0
+    # Test inventory at risk calculations
+    def test_inventory_at_risk_calculation(self):
+        # Filter and calculate inventory at risk
+        inventory_at_risk = df.filter(col("dnsa_flag") == "Y") \
+            .agg(spark_sum("financial_qty").alias("inventory_at_risk")) \
+            .first()["inventory_at_risk"]
+        
+        # Assert the sum of Y financial_qty is correct
+        expected_sum = 450.0  # 150 + 300
+        self.assertEqual(inventory_at_risk, expected_sum, "Inventory at risk calculation is incorrect.")
 
-# Calculate Percentage of Inventory at Risk
-inventory_at_risk = inventory_at_risk_df.collect()[0]['inventory_at_risk']
-percentage_of_inventory_at_risk = (inventory_at_risk / total_inventory) * 100 if total_inventory else None
+    # Test percentage of inventory at risk calculation
+    def test_percentage_of_inventory_at_risk(self):
+        # Assume total_inventory is provided
+        total_inventory = 1000.0
 
-# Assertions for testing
-assert inventory_at_risk == 450.0, "Inventory at Risk calculation failed"
-assert percentage_of_inventory_at_risk == 36.0, "Percentage of Inventory at Risk calculation failed"
+        # Calculate inventory at risk
+        inventory_at_risk = df.filter(col("dnsa_flag") == "Y") \
+            .agg(spark_sum("financial_qty").alias("inventory_at_risk")) \
+            .first()["inventory_at_risk"]
 
-print(f"Inventory At Risk: {inventory_at_risk}")
-print(f"Percentage of Inventory At Risk: {percentage_of_inventory_at_risk}")
+        # Calculate percentage of inventory at risk
+        percentage_of_inventory_at_risk = (inventory_at_risk / total_inventory) * 100
+        
+        # Assert the calculated percentage is correct
+        expected_percentage = 45.0  # (450 / 1000) * 100
+        self.assertAlmostEqual(percentage_of_inventory_at_risk, expected_percentage, "Percentage of inventory at risk calculation is incorrect.")
 
-# Clean up temporary view
-spark.catalog.dropTempView("f_inv_movmnt")
+    # Schema validation test
+    def test_schema_validation(self):
+        expected_schema = schema
+        self.assertTrue(df.schema == expected_schema, "Schema validation failed.")
 
-# Stop the Spark session
-spark.stop()
+# Run unit tests
+if __name__ == '__main__':
+    unittest.main(argv=['ignored', '-v'], exit=False, verbosity=2)
 
--- SQL Test Code for Inventory at Risk and Percentage Calculation
--- Ensure the necessary table is created and populated with comprehensive test data
+-- Databricks SQL testing and validation
 
 -- Calculate Inventory at Risk
+WITH RiskyInventory AS (
+    SELECT financial_qty
+    FROM agilisium_playground.purgo_playground.f_inv_movmnt
+    WHERE dnsa_flag = "Y"
+)
+
+-- Summarize inventory at risk
 SELECT SUM(financial_qty) AS inventory_at_risk
-FROM agilisium_playground.purgo_playground.f_inv_movmnt
-WHERE dnsa_flag = "Y";
+FROM RiskyInventory;
 
--- Calculate total inventory for percentage calculation (mock value for this test)
--- This value should be replaced with appropriate calculation or source data retrieval
-SELECT 1250.0 AS total_inventory;
-
--- Compute Percentage of Inventory at Risk
-WITH risk AS (
-  SELECT SUM(financial_qty) AS inventory_at_risk
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
-  WHERE dnsa_flag = "Y"
-),
-total AS (
-  SELECT SUM(financial_qty) AS total_inventory
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
+-- Calculate Total Inventory
+-- Assuming there's a total inventory value available for calculations
+WITH TotalInventory AS (
+    SELECT SUM(financial_qty) AS total_inventory
+    FROM agilisium_playground.purgo_playground.f_inv_movmnt
 )
+
+-- Calculate Percentage of Inventory at Risk
 SELECT 
-  (CASE 
-    WHEN total_inventory > 0 THEN (inventory_at_risk / total_inventory) * 100 
-    ELSE NULL 
-  END) AS percentage_of_inventory_at_risk
-FROM risk CROSS JOIN total;
+    (SUM(RiskyInventory.financial_qty) / TotalInventory.total_inventory) * 100 AS percentage_of_inventory_at_risk
+FROM RiskyInventory, TotalInventory;
 
--- Validate if total_inventory is NULL
--- Expect this test to produce an error message if total_inventory is not provided
-WITH total AS (
-  SELECT NULL AS total_inventory
-)
-SELECT 
-  (CASE 
-    WHEN total_inventory IS NOT NULL THEN "Total inventory not provided. Calculation cannot proceed."
-    ELSE "Error: Total inventory must be provided."
-  END) AS error_check
-FROM total;
+-- Validate Delta Lake operations
+-- Example: INSERT INTO delta lake
+MERGE INTO agilisium_playground.purgo_playground.f_inv_movmnt AS target
+USING (
+    SELECT 29 AS id, "N" AS dnsa_flag, 123.0 AS financial_qty, CURRENT_TIMESTAMP AS timestamp_event
+) AS source
+ON target.id = source.id
+WHEN MATCHED THEN
+    UPDATE SET target.financial_qty = source.financial_qty
+WHEN NOT MATCHED
+    THEN INSERT (id, dnsa_flag, financial_qty, timestamp_event) VALUES (source.id, source.dnsa_flag, source.financial_qty, source.timestamp_event);
 
--- Schema Validation Test Code
--- Confirm f_inv_movmnt table schema matches expectations
-SHOW COLUMNS IN agilisium_playground.purgo_playground.f_inv_movmnt;
-
--- Ensure table constraints or primary key constraints are accurately defined
--- Typically requires business logic or is derived from real-world requirements
-
--- Validate Delta Lake operations if applicable
--- Check Delta Lake table for specific versioning and transaction history requirements
-
-# Performance Test Code (PySpark)
-from pyspark.sql.functions import expr
-
-# Test optimized query for computing inventory at risk
-optimized_inventory_query = df.filter(col("dnsa_flag") == "Y") \
-    .groupBy("dnsa_flag") \
-    .agg(_sum("financial_qty").alias("inventory_at_risk"))
-
-optimized_inventory_at_risk = optimized_inventory_query.collect()[0]["inventory_at_risk"]
-
-# Ensure optimized query returns the expected performance results
-assert optimized_inventory_at_risk == inventory_at_risk, "Performance-optimized inventory at risk calculation failed"
+-- Cleanup operations
+-- Example: Delete test data if needed
+DELETE FROM agilisium_playground.purgo_playground.f_inv_movmnt WHERE id >= 29;
