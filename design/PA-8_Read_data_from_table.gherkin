@@ -1,52 +1,49 @@
-Feature: Data Integration and Validation for Purgo Playground
+Feature: Data Extraction from sample_users_data Table
 
   Background:
-    Given the Unity Catalog Schema is "purgo_playground"
-    And the table "sample_sales_data" exists with columns "country_cd", "product_id", "qty_sold", "sales_date"
-    And the table "sample_users_data" exists with columns "country_cd", "product_id", "qty_sold", "sales_date", "valid"
+    Given the Unity Catalog schema is "purgo_playground"
+    And the catalog is "agilisium_playground"
+    And the table is "sample_users_data"
 
-  Scenario: Validate and Integrate Data from Sample Users Data
-    Given the "valid" column in "sample_users_data" is used to filter records
-    When the "valid" column value is 1
-    Then the record should be considered for integration
+  Scenario: Successful data extraction for valid records
+    Given the table "sample_users_data" exists in the schema "purgo_playground"
+    When I query the table for records where "valid" is 1
+    Then I should receive a dataset with columns "country_cd", "product_id", "qty_sold", "sales_date", "valid"
+    And the "valid" column should only contain the value 1
 
-  Scenario Outline: Successful Data Integration
-    Given a record in "sample_users_data" with country_cd "<country_cd>", product_id "<product_id>", qty_sold "<qty_sold>", sales_date "<sales_date>", valid "<valid>"
-    When the "valid" column value is 1
-    Then the record should be integrated with "sample_sales_data"
-    And the integrated data should match the format:
-      | country_cd | product_id | qty_sold | sales_date  |
+  Scenario: Error when accessing non-existent table
+    Given the table "non_existent_table" does not exist in the schema "purgo_playground"
+    When I attempt to query the table
+    Then I should receive an error message "Table 'non_existent_table' not found in schema 'purgo_playground'"
+
+  Scenario Outline: Data validation for extracted records
+    Given the table "sample_users_data" is queried for valid records
+    When the data is extracted
+    Then each record should have a "country_cd" in the format of two uppercase letters
+    And each "product_id" should start with 'P' followed by four digits
+    And "qty_sold" should be a positive integer
+    And "sales_date" should be in the format YYYY-MM-DD
     Examples:
       | country_cd | product_id | qty_sold | sales_date  | valid |
       | US         | P1001      | 50       | 2024-01-15  | 1     |
-      | US         | P1002      | 30       | 2024-01-16  | 1     |
-      | CA         | P1001      | 40       | 2024-01-15  | 1     |
       | CA         | P1003      | 25       | 2024-01-17  | 1     |
 
-  Scenario: Error Handling for Invalid Records
-    Given a record in "sample_users_data" with valid column value 0
-    When the record is processed
-    Then an error message "Record is invalid and cannot be integrated" should be logged
+  Scenario: Error when invalid data format is detected
+    Given the table "sample_users_data" is queried for valid records
+    When a record with "country_cd" not in the format of two uppercase letters is found
+    Then I should receive an error message "Invalid country code format detected"
 
-  Scenario: Data Transformation and Calculation
-    Given a record in "sample_users_data" with qty_sold "<qty_sold>"
-    When the data is integrated
-    Then the qty_sold should be summed for each product_id and country_cd
-    And the result should be stored in "sample_sales_data"
+  Scenario: Error when invalid product_id format is detected
+    Given the table "sample_users_data" is queried for valid records
+    When a record with "product_id" not starting with 'P' followed by four digits is found
+    Then I should receive an error message "Invalid product ID format detected"
 
-  Scenario Outline: Error Scenario for Missing Data
-    Given a record in "sample_users_data" with missing "<column>"
-    When the record is processed
-    Then an error message "Missing data in <column>" should be logged
-    Examples:
-      | column      |
-      | country_cd  |
-      | product_id  |
-      | qty_sold    |
-      | sales_date  |
+  Scenario: Error when negative qty_sold is detected
+    Given the table "sample_users_data" is queried for valid records
+    When a record with "qty_sold" less than 0 is found
+    Then I should receive an error message "Quantity sold cannot be negative"
 
-  Scenario: Constraints and Limitations
-    Given the data processing constraints
-    When the data is processed
-    Then the storage should not exceed the allocated space
-    And processing time should be within acceptable limits
+  Scenario: Error when invalid sales_date format is detected
+    Given the table "sample_users_data" is queried for valid records
+    When a record with "sales_date" not in the format YYYY-MM-DD is found
+    Then I should receive an error message "Invalid sales date format detected"
