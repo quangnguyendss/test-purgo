@@ -1,11 +1,14 @@
+# Import required PySpark modules
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType
-from pyspark.sql.functions import lit
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
+from pyspark.sql.functions import col, lit
 
-# Initialize Spark session
-spark = SparkSession.builder.appName("TestDataGeneration").getOrCreate()
+# Initialize a Spark session
+spark = SparkSession.builder \
+    .appName("Databricks Test Data Generation") \
+    .getOrCreate()
 
-# Define schema for sales data based on Unity Catalog requirements
+# Define schema for the sample sales data
 schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
@@ -13,50 +16,32 @@ schema = StructType([
     StructField("sales_date", TimestampType(), True)
 ])
 
-# Happy path test data (valid scenarios)
-happy_path_data = [
+# Sample test data containing happy path, edge cases, error cases, nulls, and special characters
+test_data = [
+    # Happy Path records
     ("US", "P1001", 50, "2024-01-15T00:00:00.000+0000"),
-    ("US", "P1002", 30, "2024-01-16T00:00:00.000+0000"),
-    ("CA", "P1001", 40, "2024-01-15T00:00:00.000+0000"),
-    ("CA", "P1003", 25, "2024-01-17T00:00:00.000+0000")
+    ("CA", "P1003", 25, "2024-01-17T00:00:00.000+0000"),
+    
+    # Edge case records
+    ("UK", None, 0, "2024-01-18T00:00:00.000+0000"),  # qty_sold = 0 (edge case)
+    ("IN", "P1003", 2147483647, "2024-01-21T00:00:00.000+0000"),  # max int value for qty_sold
+    
+    # Error cases
+    ("AU", "PXXXX", -1, "2024-01-22T00:00:00.000+0000"),  # invalid product_id and negative qty_sold
+    ("ZZ", "P1002", 35, "2022-13-40T00:00:00.000+0000"),  # invalid date format
+    
+    # NULL handling
+    (None, "P1004", 55, "2024-01-23T00:00:00.000+0000"),  # NULL country_cd
+    ("US", None, None, None),  # All NULL values
+    
+    # Special characters and multi-byte characters
+    ("JP", "P1001", 60, "2024-02-15T00:00:00.000+0000"),  # Valid Japanese country
+    ("CN", "P1005☃️", 45, "2024-02-21T00:00:00.000+0000")  # Special snowman character in product_id
 ]
 
-# Edge cases (boundary conditions)
-edge_cases_data = [
-    ("XX", "P1005", 0, "2024-12-31T23:59:59.999+0000"),  # Invalid country code, zero quantity, max timestamp
-    ("ZZ", "P9999", 9999, "2024-01-01T00:00:00.000+0000")  # Another invalid country, high quantity, min timestamp
-]
+# Create DataFrame using the above schema and data
+test_df = spark.createDataFrame(test_data, schema)
 
-# Error cases (invalid inputs)
-error_cases_data = [
-    ("US", "P1001", -5, "2024-01-15T00:00:00.000+0000"),  # Negative quantity
-    ("UK", "INVALID", 10, "NOT_A_DATE")  # Invalid date
-]
-
-# NULL handling scenarios
-null_handling_data = [
-    (None, "P1002", 20, "2024-01-17T00:00:00.000+0000"),  # NULL country code
-    ("IN", "P1003", None, "2024-01-21T00:00:00.000+0000")  # NULL quantity
-]
-
-# Special characters and multi-byte characters
-special_characters_data = [
-    ("CN", "P2002", 45, "2024-02-29T00:00:00.000+0000"),  # Leap year date
-    ("JP", "プロダクトID", 33, "2024-04-01T00:00:00.000+0000"),  # Product ID with multibyte character
-]
-
-# Combine all test data
-combined_data = happy_path_data + edge_cases_data + error_cases_data + null_handling_data + special_characters_data
-
-# Create DataFrame
-df = spark.createDataFrame(combined_data, schema)
-
-# Show DataFrame
-df.show(truncate=False)
-
-# Save to Databricks table (assuming Unity Catalog setup)
-df.write.mode("overwrite").format("delta").saveAsTable("purgo_playground.sales_data_test")
-
-# Stop Spark session
-spark.stop()
-
+# Print schema and data to verify
+test_df.printSchema()
+test_df.show(20, False)
