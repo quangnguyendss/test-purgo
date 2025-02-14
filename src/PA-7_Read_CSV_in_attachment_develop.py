@@ -1,91 +1,76 @@
-# PYSPARK IMPLEMENTATION FOR PROCESSING SAMPLE SALES DATA
+# PYSPARK IMPLEMENTATION CODE
 
 # Import necessary modules
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType
-from pyspark.sql.functions import col, when, log, current_timestamp
+from pyspark.sql.functions import col, lit, when, rlike, current_timestamp, expr
+from pyspark.sql.types import StringType, IntegerType
 
-# Define schema for the CSV file
-schema = StructType([
-    StructField("country_cd", StringType(), True),
-    StructField("product_id", StringType(), True),
-    StructField("qty_sold", IntegerType(), True),
-    StructField("sales_date", StringType(), True)  # String type to validate 'YYYY-MM-DD' format
-])
+# Define a function to validate and process the CSV data
+def process_sales_data(file_path, table_name):
+    """
+    Process sales data CSV, perform validation, and load into Delta Lake table.
+    
+    :param file_path: Path to the CSV file
+    :param table_name: Target Delta Lake table name
+    """
+    # Read CSV file into DataFrame
+    df = spark.read.option("header", "true").csv(file_path)
+    
+    # Validate qty_sold to be positive integers and sales_date to be in correct format
+    df_validated = df.withColumn("qty_sold", df["qty_sold"].cast(IntegerType())) \
+                     .withColumn("qty_sold", when(col("qty_sold") > 0, col("qty_sold")).otherwise(None)) \
+                     .withColumn("sales_date", when(rlike(col("sales_date"), r'^\d{4}-\d{2}-\d{2}$'), col("sales_date")).otherwise(None)) \
+                     .withColumn("load_datetime", current_timestamp())
 
-# Read CSV data into DataFrame
-file_path = "/path/to/sample_sales_data.csv"  # Replace with actual path in Databricks
-sales_df = spark.read.csv(file_path, header=True, schema=schema)
+    # Data quality checks and error logging
+    df_invalid_qty = df_validated.filter(col("qty_sold").isNull())
+    df_invalid_date_format = df_validated.filter(col("sales_date").isNull())
+    
+    # Log validation issues
+    df_invalid_qty.select("product_id", "sales_date").withColumn(
+        "error_message", lit("Invalid quantity: must be a positive integer")).show(truncate=False)
+    df_invalid_date_format.select("product_id", "sales_date").withColumn(
+        "error_message", lit("Invalid date format: must be YYYY-MM-DD")).show(truncate=False)
+    
+    # Filter out invalid records
+    df_filtered = df_validated.filter(df_validated["qty_sold"].isNotNull() & df_validated["sales_date"].isNotNull())
 
-# Data Validation and Cleaning
-sales_df = sales_df \
-    .withColumn("qty_sold", when(col("qty_sold") > 0, col("qty_sold")).otherwise(None)) \
-    .withColumn("sales_date_valid", col("sales_date").rlike(r'^\d{4}-\d{2}-\d{2}$'))
+    # Write to Delta Lake with schema evolution and table optimization
+    df_filtered.write.format("delta") \
+        .mode("append") \
+        .option("mergeSchema", "true") \
+        .partitionBy("country_cd") \
+        .saveAsTable(table_name)
 
-# Filter out invalid records
-invalid_qty_df = sales_df.filter(col("qty_sold").isNull())
-invalid_date_df = sales_df.filter(~col("sales_date_valid"))
+    # Table optimization and vacuum
+    spark.sql(f"OPTIMIZE {table_name} ZORDER BY (sales_date)")
+    spark.sql(f"VACUUM {table_name} RETAIN 0 HOURS")
 
-# Log invalid records
-log_message_invalid_qty = "Invalid quantity for entries: " + str(invalid_qty_df.count())
-log_message_invalid_date = "Invalid date format for entries: " + str(invalid_date_df.count())
+# Run the processing function
+process_sales_data("/dbfs/path/to/sample_sales_data.csv", "purgo_playground.sales_data")
 
-log(log_message_invalid_qty)
-log(log_message_invalid_date)
+-- SQL IMPLEMENTATION CODE
 
-# Clean up DataFrame to keep only valid records
-sales_df = sales_df.filter(col("qty_sold").isNotNull() & col("sales_date_valid"))
+-- Ensure Unity Catalog and access permissions
+-- CREATE CATALOG purgo_playground IF NOT EXISTS;
+-- USE CATALOG purgo_playground;
 
-# Remove 'sales_date_valid' helper column
-sales_df = sales_df.drop("sales_date_valid")
-
-# Write the result to Delta table with appropriate partitioning
-sales_df.write.format("delta") \
-    .mode("overwrite") \
-    .partitionBy("country_cd") \
-    .option("mergeSchema", "true") \
-    .saveAsTable("purgo_playground.sales_data")
-
-# Optimize and Z-order Delta table
-spark.sql("OPTIMIZE purgo_playground.sales_data ZORDER BY (sales_date)")
-
-# Clean Old Files using VACUUM
-spark.sql("VACUUM purgo_playground.sales_data RETAIN 168 HOURS")  # Retain 7 days
-
--- SQL IMPLEMENTATION FOR VALIDATING AND ACCESS CONTROL SETUP
-
-/* Ensure the temp CSV table doesn't exist */
-DROP TABLE IF EXISTS purgo_playground.temp_sales_data;
-
-/* Load CSV into a temporary Delta table */
-CREATE OR REPLACE TABLE purgo_playground.temp_sales_data AS
-SELECT * FROM csv.`/path/to/sample_sales_data.csv`;  -- Modify to actual CSV file path
-
-/* Validate data: Identify invalid qty_sold and date format */
-WITH validation AS (
-  SELECT *,
-         CASE WHEN qty_sold <= 0 THEN 'Invalid quantity' END AS qty_issue,
-         CASE WHEN NOT sales_date RLIKE '^\d{4}-\d{2}-\d{2}$' THEN 'Invalid date' END AS date_issue
-  FROM purgo_playground.temp_sales_data
+/* Create target table if not exists */
+CREATE TABLE IF NOT EXISTS purgo_playground.sales_data (
+    country_cd STRING,
+    product_id STRING,
+    qty_sold INTEGER,
+    sales_date STRING,
+    load_datetime TIMESTAMP
 )
+USING DELTA
+PARTITIONED BY (country_cd)
+LOCATION '/mnt/delta/purgo_playground/sales_data';
 
-/* Log invalid records */
-SELECT * FROM validation WHERE qty_issue IS NOT NULL OR date_issue IS NOT NULL;
+/* Grant table permissions */
+GRANT SELECT ON TABLE purgo_playground.sales_data TO ROLE data_viewer;
 
-/* Insert valid records into the final sales_data table */
-INSERT INTO purgo_playground.sales_data
-SELECT country_cd, product_id, qty_sold, sales_date 
-FROM validation WHERE qty_issue IS NULL AND date_issue IS NULL;
-
-/* Configure access control for the sales_data table */
-GRANT SELECT ON purgo_playground.sales_data TO 'data_viewer';
-GRANT SELECT ON purgo_playground.sales_data TO 'data_analyst';
-
-/* Log data access */
--- Assuming there is a logging mechanism in place
-SELECT current_timestamp() AS access_time, user() AS accessed_by
-FROM purgo_playground.sales_data;
-
-/* Security and Compliance Check */
--- Log GDPR compliance message
-INSERT INTO security_logs(status, message, timestamp)
-VALUES ('SUCCESS', 'Data processing and storage complies with GDPR', current_timestamp());
+/* Procedure for data compliance logging */
+INSERT INTO purgo_playground.logs SELECT 
+    current_timestamp() as log_time, 
+    "GDPR compliance validation" as log_type, 
+    "Data processing and storage complies with GDPR" as message;
