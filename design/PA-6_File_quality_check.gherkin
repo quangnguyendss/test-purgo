@@ -1,0 +1,62 @@
+Feature: File Quality Check and Data Load to Unity Catalog
+
+  As a Data Engineer,
+  I want to validate the source sales file and load the validated records into the sales table,
+  So that the data is accurate, complete, and can be reliably used for further reporting and analysis.
+
+  Background:
+    Given the source file is located at dbfs:/FileStore/tables/sales_20240611.csv
+    And the target table is sales in Unity Catalog schema purgo_playground
+    And the exception table is setup with schema to record erroneous data
+
+  Scenario Outline: Validate and Load Data with Quality Checks
+    Given a new sales file is available
+    When the file is parsed for data quality checks
+    Then it should identify and log the error records to the exception table
+    And load the valid records into the sales table
+
+    Examples: Data Validation Checks
+      | Validation Check                   | Condition                                     |
+      | Country Code                      | country_cd should not be null                 |
+      | Quantity Sold                     | qty_sold should be numeric                    |
+      | Product ID                        | product_id should not be duplicate            |
+      | Date Format                       | Date should be in yyyy-mm-dd format           |
+
+  Scenario: Validate Missing Values
+    Given the sales file
+    When a field "country_cd" is empty
+    Then it should log the record to the exception table with message "country_cd should not be null"
+
+  Scenario: Validate Numeric Fields
+    Given the sales file
+    When the field "qty_sold" is non-numeric
+    Then it should log the record to the exception table with message "qty_sold should be numeric"
+
+  Scenario: Validate Unique Product ID
+    Given the sales file
+    When "product_id" is duplicated
+    Then it should log the duplicate records to the exception table with message "Duplicate product_id detected"
+
+  Scenario: Validate Date Format
+    Given the sales file
+    When the date is not in "yyyy-mm-dd" format
+    Then it should log the record to the exception table with message "Incorrect date format"
+
+  Scenario Outline: Load Valid Data
+    Given the sales file after quality checks
+    When the exception records are removed
+    Then it should load the remaining records to the sales table
+    And use mergeSchema set to true
+
+    Examples:
+      | Field        | Data Type   | Validation Rule                     |
+      | country_cd   | String      | Should not be null                  |
+      | qty_sold     | Integer     | Must be numeric                     |
+      | product_id   | String      | Must be unique                      |
+      | sale_date    | Date        | Format yyyy-mm-dd                   |
+
+  Scenario: Load Error Records to Exception Table
+    Given validation process identifies error records
+    When logging to exception table
+    Then ensure mergeSchema is true for exception table
+    And include error description message
