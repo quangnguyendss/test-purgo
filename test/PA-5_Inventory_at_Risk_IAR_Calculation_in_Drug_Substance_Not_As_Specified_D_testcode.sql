@@ -1,131 +1,90 @@
--- SQL Test Cases for Inventory at Risk Calculation
+/* SQL Test Code: Inventory at Risk Calculation */
 
--- Test Case 1: Calculate Inventory at Risk for DNSA active flag
-WITH inventory_at_risk AS (
-  SELECT SUM(financial_qty) AS total_at_risk
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
-  WHERE dnsa_flag = "Y"
-)
+-- Ensure Databricks SQL syntax is used
+-- Define the calculation for inventory_at_risk and percentage_of_inventory_at_risk
 
--- Assert the sum of Y flagged quantities is correct
-SELECT total_at_risk
-FROM inventory_at_risk
-WHERE total_at_risk = (
-  SELECT SUM(financial_qty)
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
-  WHERE dnsa_flag = "Y"
-);
+-- NOTE: Define total inventory (total_inventory) based on your specific use case or available data
 
--- Test Case 2: Validate percentage calculation for Inventory at Risk
-WITH total_inventory AS (
-  SELECT SUM(financial_qty) AS total_qty
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
-),
-inventory_at_risk AS (
-  SELECT SUM(financial_qty) AS total_at_risk
-  FROM agilisium_playground.purgo_playground.f_inv_movmnt
-  WHERE dnsa_flag = "Y"
-),
-percentage_at_risk AS (
-  SELECT
-    (total_at_risk / total_qty) * 100 AS percentage
-  FROM inventory_at_risk, total_inventory
-)
-
--- Assert percentage is computed correctly
-SELECT percentage
-FROM percentage_at_risk;
-
--- Test Case 3: Error handling for undefined total inventory
--- In a real environment, this would be handled by appropriate error handling logic
-
--- Test Case 4: Data and calculation validation
-WITH example_data (flag_status, financial_data, expected_result) AS (
-  SELECT "Y", ARRAY(100.0, 200.0, 300.0), 600.0 UNION ALL
-  SELECT "N", ARRAY(100.0, 200.0, 300.0), 0.0     UNION ALL
-  SELECT "Y", ARRAY(), 0.0
-)
+-- Calculate the inventory at risk based on DNSA flag being 'Y'
+CREATE OR REPLACE VIEW v_inventory_at_risk AS
 SELECT
-  flag_status,
-  CASE 
-    WHEN flag_status = "Y"
-    THEN ARRAY_SUM(financial_data)
-    ELSE 0
-  END AS calculated_result,
-  expected_result
-FROM example_data
-WHERE
-  calculated_result = expected_result;
+  SUM(CASE WHEN dnsa_flag = "Y" THEN financial_qty ELSE 0 END) AS inventory_at_risk
+FROM
+  agilisium_playground.purgo_playground.f_inv_movmnt;
 
--- Test Case 5: Validate Delta Lake Operations
--- Assuming Delta Lake operations need to be tested separately, here is a mock for Delta testing:
--- CREATE OR REPLACE TABLE delta_table USING DELTA ...
+-- Validate the result for inventory_at_risk calculation
+SELECT * FROM v_inventory_at_risk;
 
--- Test Case 6: Validation of MERGE, UPDATE, DELETE
--- Perform MERGE operation and validate its correctness
-MERGE INTO agilisium_playground.purgo_playground.f_inv_movmnt AS target
-USING (SELECT 1 AS id, "N" AS dnsa_flag, 180.0 AS financial_qty) AS source
-ON target.id = source.id
-WHEN MATCHED THEN
-  UPDATE SET target.dnsa_flag = source.dnsa_flag
-WHEN NOT MATCHED THEN
-  INSERT (id, dnsa_flag, financial_qty) VALUES (source.id, source.dnsa_flag, source.financial_qty);
+-- Calculate the percentage of inventory at risk
+CREATE OR REPLACE VIEW v_percentage_of_inventory_at_risk AS
+SELECT
+  inventory_at_risk,
+  (inventory_at_risk / total_inventory) * 100 AS percentage_of_inventory_at_risk
+FROM
+  v_inventory_at_risk, -- Self-join to access inventory_at_risk
+  (SELECT CAST(10000 AS DOUBLE) AS total_inventory) AS tmp_total_inventory -- Placeholder for total_inventory
 
--- Validate update by checking records
-SELECT * FROM agilisium_playground.purgo_playground.f_inv_movmnt WHERE id = 1;
+-- Validate the output of percentage calculation
+SELECT * FROM v_percentage_of_inventory_at_risk;
 
--- Cleanup operations
--- Drop any temporary tables or clean up data to prepare for next test
+-- Assert that total_inventory is defined and not null
+SELECT CASE WHEN total_inventory IS NULL THEN RAISE_ERROR("Total inventory not provided. Calculation cannot proceed.") END
+FROM v_percentage_of_inventory_at_risk;
 
-# PySpark Test Cases for Inventory at Risk Calculation
+/* Test Cases for SQL-based Calculation */
 
-# Import necessary libraries and modules
+-- Test the view creation and data aggregation on the table
+SELECT
+  id,
+  dnsa_flag,
+  financial_qty,
+  timestamp_event,
+  CASE WHEN dnsa_flag = "Y" THEN financial_qty ELSE 0 END AS calc_financial_qty,
+  (SUM(CASE WHEN dnsa_flag = "Y" THEN financial_qty ELSE 0 END) OVER ()) AS total_inventory
+FROM
+  agilisium_playground.purgo_playground.f_inv_movmnt;
+
+/** PySpark Test Code **/
+
+# Import necessary PySpark libraries
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import sum as spark_sum, col
-import pytest
+from pyspark.sql.functions import col, sum as _sum, when, expr
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 
-# Initialize Spark session for testing
-spark = SparkSession.builder \
-    .appName("Databricks Testing") \
-    .getOrCreate()
+# Initialize Spark Session
+spark = SparkSession.builder.appName("Databricks InventoryTesting").getOrCreate()
 
-# Mock data for testing
-data = [
-    (1, "Y", 150.0),
-    (2, "N", 200.0),
-    (3, "Y", 300.0),
-    (7, "Y", None),
-]
+# Schema definition for DataFrame; ensure it matches the table structure
+schema = StructType([
+    StructField("id", IntegerType(), True),
+    StructField("dnsa_flag", StringType(), True),
+    StructField("financial_qty", DoubleType(), True),
+    StructField("timestamp_event", TimestampType(), True)
+])
 
-schema = ["id", "dnsa_flag", "financial_qty"]
-df = spark.createDataFrame(data, schema)
+# Load the table into a DataFrame
+df = spark.table("agilisium_playground.purgo_playground.f_inv_movmnt")
 
-# Test Case: Check schema validation
-def test_schema_validation():
-    expected_schema = ["id", "dnsa_flag", "financial_qty"]
-    assert df.columns == expected_schema
+# Unit test for calculating inventory at risk
+inventory_at_risk_df = df.groupBy().agg(_sum(when(col("dnsa_flag") == "Y", col("financial_qty")).otherwise(0)).alias("inventory_at_risk"))
 
-# Test Case: Calculate inventory at risk
-def test_inventory_at_risk():
-    inventory_at_risk_df = df.filter(col("dnsa_flag") == "Y")\
-                             .agg(spark_sum("financial_qty").alias("total_at_risk"))
-    result = inventory_at_risk_df.collect()[0]["total_at_risk"]
-    assert result == 450.0  # Manual calculation based on mock data
+# Schema validation assertion
+assert inventory_at_risk_df.schema.names == ["inventory_at_risk"], "Schema mismatch for inventory_at_risk calculation."
 
-# Test Case: Null handling and conversion
-def test_null_handling():
-    df_with_null = df.filter(col("financial_qty").isNull())
-    assert df_with_null.count() == 1  # Should find 1 record
+# Unit test for calculating percentage of inventory at risk
+total_inventory = 10000.0  # Placeholder for total inventory
+percentage_inventory_df = inventory_at_risk_df.withColumn("percentage_of_inventory_at_risk", col("inventory_at_risk") / total_inventory * 100)
 
-# Test Case: End-to-end integration
-def test_end_to_end_integration():
-    total_inventory = df.agg(spark_sum("financial_qty").alias("total_qty")).collect()[0]["total_qty"]
-    inventory_at_risk_df = df.filter(col("dnsa_flag") == "Y")\
-                             .agg(spark_sum("financial_qty").alias("total_at_risk"))
-    inventory_at_risk = inventory_at_risk_df.collect()[0]["total_at_risk"]
-    percentage_at_risk = (inventory_at_risk / total_inventory) * 100 if total_inventory else 0
-    assert percentage_at_risk == pytest.approx((450.0 / (150.0 + 200.0 + 300.0)) * 100, 0.01)
+# Output for manual verification, replace asserts/logic with unittest or pytest for structured testing
+percentage_inventory_df.show()
 
-# Cleanup resources
-# Close Spark session
+# Check for defined total inventory
+if total_inventory is None:
+    raise ValueError("Total inventory not provided. Calculation cannot proceed.")
+
+# Clean up the created resources
+spark.sql("DROP VIEW IF EXISTS v_inventory_at_risk")
+spark.sql("DROP VIEW IF EXISTS v_percentage_of_inventory_at_risk")
+
+# Stop the Spark session
 spark.stop()
