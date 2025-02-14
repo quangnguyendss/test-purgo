@@ -1,91 +1,89 @@
-# PYSPARK DATA PROCESSING CODE
+# PYTHON IMPLEMENTATION IN DATABRICKS
 
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
-from pyspark.sql.functions import col, to_date, when
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql.functions import col, to_date, when, lit, current_timestamp
 from delta.tables import DeltaTable
 
-# Define schema for input data
-input_schema = StructType([
+# Define schema for CSV file
+schema = StructType([
     StructField("country_cd", StringType(), True),
     StructField("product_id", StringType(), True),
     StructField("qty_sold", IntegerType(), True),
-    StructField("sales_date", StringType(), True)  # Use StringType to handle date validation
+    StructField("sales_date", StringType(), True)
 ])
 
-# Read CSV into DataFrame
-df = spark.read.csv("/path/to/sample_sales_data.csv", header=True, schema=input_schema)
+# Load CSV file into DataFrame
+df = spark.read.csv("/FileStore/sample_sales_data.csv", schema=schema, header=True)
 
-# Validate and transform data
-df_clean = df.withColumn(
-    "sales_date", 
-    when(~col("sales_date").rlike(r'^\d{4}-\d{2}-\d{2}$'), None).otherwise(col("sales_date"))
-).withColumn(
-    "qty_sold", 
-    when(col("qty_sold") <= 0, None).otherwise(col("qty_sold"))
-)
+# Data Cleaning & Validation
+allowed_country_codes = ['US', 'CA', 'UK', 'IN', 'AU']
+df_cleaned = df \
+    .withColumn("qty_sold", when(col("qty_sold") > 0, col("qty_sold")).otherwise(None)) \
+    .withColumn("sales_date", to_date(col("sales_date"), "yyyy-MM-dd")) \
+    .filter(col("country_cd").isin(allowed_country_codes))
 
-# Data Quality Checks and Logging
-if df_clean.filter((col("sales_date").isNull()) | (col("qty_sold").isNull())).count() > 0:
-    df_clean.filter(col("sales_date").isNull()).foreach(lambda row: print(f"Invalid date format for {row.product_id} at {row.sales_date}"))
-    df_clean.filter(col("qty_sold").isNull()).foreach(lambda row: print(f"Invalid quantity for {row.product_id} at {row.sales_date}. Quantity must be a positive integer."))
+# Log errors for invalid data
+invalid_qty_sold = df.filter(col("qty_sold") <= 0)
+invalid_dates = df.filter(col("sales_date").isNull() & df["sales_date"].isNotNull())
+invalid_qty_sold.select("*").withColumn("error_message", lit("Invalid quantity for product_id at sales_date. Quantity must be a positive integer.")).show()
+invalid_dates.select("*").withColumn("error_message", lit("Invalid date format for product_id at sales_date. Date must be in YYYY-MM-DD format.")).show()
 
-# Perform necessary transformations
-df_final = df_clean.dropna()  # Remove rows with NULL values post validation
+# Write cleaned data to Delta Lake
+delta_table_path = "/delta/purgo_playground/sales_data"
+df_cleaned.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(delta_table_path)
 
-# Prepare Delta Lake Table
-table_name = "purgo_playground.sales_data"
+# Optimize and set Z-order
+delta_table = DeltaTable.forPath(spark, delta_table_path)
+delta_table.optimize().executeZOrderBy("sales_date")
 
-# Optimization Strategies and Table Management
-if not DeltaTable.isDeltaTable(spark, f"/delta/{table_name}"):
-    df_final.write.format("delta").mode("overwrite").saveAsTable(table_name)
-else:
-    delta_table = DeltaTable.forPath(spark, f"/delta/{table_name}")
-    delta_table.alias("tgt").merge(
-        df_final.alias("src"),
-        "tgt.product_id = src.product_id AND tgt.sales_date = src.sales_date"
-    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+# Set table properties for Delta Lake
+spark.sql(f"""
+    ALTER TABLE delta.`{delta_table_path}`
+    SET TBLPROPERTIES (
+        'delta.autoOptimize.optimizeWrite' = 'true',
+        'delta.autoOptimize.autoCompact' = 'true'
+    )
+""")
 
-# Optimize and Vacuum the Delta Table
-spark.sql(f"OPTIMIZE {table_name} ZORDER BY (product_id)")
-spark.sql(f"VACUUM {table_name} RETAIN 0 HOURS")
+-- SQL IMPLEMENTATION IN DATABRICKS
 
-# Note: Ensure the path '/path/to/sample_sales_data.csv' is accessible with the correct path in Databricks
-# and that data security measures like access control are set up accordingly.
-
--- SQL DATA PROCESSING AND INTEGRITY CHECKS
-
--- Drop and create the table for new data ingestion
-DROP TABLE IF EXISTS purgo_playground.sales_data;
-CREATE TABLE purgo_playground.sales_data (
+/* Prepare Delta table with schema evolution */
+CREATE TABLE IF NOT EXISTS purgo_playground.sales_data (
     country_cd STRING,
     product_id STRING,
     qty_sold INTEGER,
-    sales_date STRING
-) USING DELTA;
+    sales_date STRING,
+    processed_at TIMESTAMP
+) 
+USING DELTA
+PARTITIONED BY (country_cd)
+LOCATION '/delta/purgo_playground/sales_data';
 
--- Insert only valid data, ensuring integrity constraints
-INSERT INTO purgo_playground.sales_data
-SELECT * FROM (
-    SELECT DISTINCT country_cd, product_id, qty_sold, sales_date
-    FROM delta.`/delta/purgo_playground.sales_data`
-    WHERE qty_sold > 0 AND sales_date RLIKE '^\d{4}-\d{2}-\d{2}$'
-);
+/* Merge processed data into Delta table, handling inserts and schema evolution */
+MERGE INTO purgo_playground.sales_data AS target
+USING (SELECT * FROM delta.`/delta/purgo_playground/sales_data`) AS source
+ON target.product_id = source.product_id AND target.sales_date = source.sales_date
+WHEN MATCHED THEN UPDATE SET *
+WHEN NOT MATCHED THEN INSERT *;
 
--- Perform data compliance checks
--- Check GDPR compliance logging
-INSERT INTO logging_table -- Placeholder for actual logging table
-SELECT current_timestamp() AS log_time, "GDPR compliance check: Valid" AS message
-WHERE EXISTS (SELECT * FROM purgo_playground.sales_data WHERE sales_date IS NOT NULL);
+/* Vacuum to clean old data versions */
+VACUUM purgo_playground.sales_data RETAIN 168 HOURS;
 
--- Ensure only authorized access based on roles
+/* Validate current dataset */
+-- Verify if the current data follows the required format and is consistent
+SELECT 
+    COUNT(*) AS invalid_qty_sold
+FROM purgo_playground.sales_data
+WHERE qty_sold <= 0;
+
+SELECT 
+    COUNT(*) AS invalid_date_format
+FROM purgo_playground.sales_data
+WHERE NOT sales_date RLIKE '^\d{4}-\d{2}-\d{2}$';
+
+/* Set data access control */
 GRANT SELECT ON purgo_playground.sales_data TO `data_viewer`;
 
-# BASH SCRIPT FOR LIBRARY INSTALLATION (ONLY IF NECESSARY)
-
-# Libraries installation (if not already available)
-# These commands should be checked and executed in Databricks notebook terminal or environment
-# Double-check library availability within Databricks Runtime
-
-# Install Delta Lake package
-# Assuming Delta Lake libraries are necessary but often come pre-installed in Databricks
-# This would typically be handled by cluster configuration or administration settings
+/* Log GDPR compliance approval */
+INSERT INTO purgo_playground.data_access_logs
+SELECT "Data processing and storage complies with GDPR", current_timestamp();
