@@ -1,0 +1,49 @@
+Feature: Real-time Calculation of Inventory at Risk
+
+  Background:
+    Given the Unity Catalog schema is "purgo_playground"
+    And the data table is "f_inv_movmnt" in "agilisium_playground.purgo_playground"
+    And the Spark SQL environment is configured
+    And access permissions to Unity Catalog are granted
+    
+  Scenario: Calculate Inventory at Risk when DNSA flag is active
+    Given the DNSA flag is "Y"
+    When I retrieve the financial_qty from the f_inv_movmnt table
+    Then I calculate the inventory_at_risk as the sum of financial_qty where dnsa_flag is "Y"
+    And I display the inventory_at_risk
+    
+  Scenario: Calculate Percentage of Inventory at Risk
+    Given the inventory_at_risk has been calculated
+    And the total_inventory is defined and retrieved
+    When I use the formula (inventory_at_risk / total_inventory) * 100
+    Then I calculate the percentage_of_inventory_at_risk
+    And I display the percentage_of_inventory_at_risk
+
+  Scenario: Error handling for undefined total inventory
+    Given the total_inventory is not defined
+    When I attempt to calculate the percentage of Inventory at Risk
+    Then I should receive an error message "Total inventory not provided. Calculation cannot proceed."
+
+  Scenario Outline: Validate data retrieval and calculation accuracy
+    Given the DNSA flag is "<flag_status>"
+    And I have the financial_qty data: <financial_data>
+    When I perform the inventory calculation
+    Then the result should be <expected_result>
+
+    Examples:
+      | flag_status | financial_data                                   | expected_result |
+      | "Y"         | [100, 200, 300]                                  | 600             |
+      | "N"         | [100, 200, 300]                                  | 0               |
+      | "Y"         | []                                               | 0               |
+
+  Scenario: Data and pipeline validation for real-time access
+    Given real-time data is required
+    When the data is accessed through existing data pipelines
+    Then the data should be current and reflect recent updates
+    And any integration issues should be identified with a message "Real-time data access successful."
+
+  Scenario: Security compliance and catalog access
+    Given the Unity Catalog requires secure access
+    When I try to access the data from f_inv_movmnt table
+    Then I must comply with security protocols
+    And I should confirm access with a message "Access granted to Unity Catalog."
